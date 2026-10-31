@@ -77,6 +77,31 @@
       <p class="hint">Sharing opens your phone’s share sheet: Instagram, Facebook, Messages. On a computer, the files download.</p>
     </section>
 
+    <section class="step" id="step-post" hidden>
+      <h2><span class="num">5</span> Post it to the wall?</h2>
+      <p class="hint">Your dog gets a page of their own on the Dedication Wall, with a link friends can open and a heart they can leave. Free. Take it down any time.</p>
+      <div id="post-signin">
+        <label class="field"><span>Your email <small>for a sign-in link; never shown</small></span><input type="email" id="post-email" autocomplete="email" placeholder="you@example.com" /></label>
+        <button type="button" class="button primary" id="post-link">Send me a sign-in link</button>
+        <p class="hint" id="post-status"></p>
+      </div>
+      <form id="post-form" hidden>
+        <p class="hint">Signed in as <strong id="post-who"></strong>. <a href="/api/auth/logout" id="post-signout">Not you?</a></p>
+        <label class="check"><input type="checkbox" id="post-attest" /><span>I’m 18 or older. This is my dog, or I have permission to share this photo, and anyone in it is fine with that.</span></label>
+        <label class="check"><input type="checkbox" id="post-show" /><span>Show <span id="post-dog">my dog</span> on the public wall.</span></label>
+        <label class="check"><input type="checkbox" id="post-news" /><span>Email me when there’s something new from Brock Alston. Optional.</span></label>
+        <p class="hint">Posting means you agree to the <a href="/terms">Terms</a> and the <a href="/privacy">Privacy Policy</a>. We look at every post before it goes up.</p>
+        <button type="submit" class="button primary" id="post-submit">Post it</button>
+        <p class="hint" id="post-form-status"></p>
+      </form>
+      <div class="done" id="post-done" hidden>
+        <p class="done-title"><strong id="done-dog">Your dog</strong> is in the queue.</p>
+        <p>We look at every post before it goes up, usually within a day. You’ll get an email at <strong id="done-email"></strong> when it’s live, with the link and a way to invite friends.</p>
+        <p>The page will be <a id="done-url" href="/wall"></a>.</p>
+        <p class="actions-inline"><a class="button" href="/wall">See the wall</a> <button type="button" class="button quiet" id="done-again">Make another</button></p>
+      </div>
+    </section>
+
     <section class="step request" id="step-request">
       <h2>Request a background</h2>
       <p class="hint">Want one we don’t have yet (Hanukkah, St. Patrick’s, a lake)? One line and an email, and we’ll let you know when it goes live.</p>

@@ -12,7 +12,7 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     // Let the Worker run first for API and wall routes; static files still win for everything else.
-    "run_worker_first": ["/api/*", "/d/*", "/wall", "/memory", "/i/*", "/privacy", "/terms", "/admin", "/admin/*", "/p/*"]
+    "run_worker_first": ["/api/*", "/d/*", "/wall", "/memory", "/i/*", "/u/*", "/privacy", "/terms", "/admin", "/admin/*", "/p/*"]
   },
   "d1_databases": [
     { "binding": "DB", "database_name": "dedication-wall", "database_id": "fbcce2c7-8c87-4c26-8b60-f0f255407ec0", "preview_database_id": "b1ff3d27-18e3-4302-961f-6ab378486e87", "migrations_dir": "migrations" }
@@ -26,7 +26,10 @@
     // DEV_MODE returns the sign-in link in the API response when no mail key is set; never true in production.
     "DEV_MODE": "false",
     "SITE_URL": "https://dedication.jetsonsjourney.com",
-    "CONTACT_EMAIL": "admin@brockalston.com"
+    "CONTACT_EMAIL": "admin@brockalston.com",
+    // The sign-up offer in invite emails (decision 6): the Riverspook reader magnet on BookFunnel.
+    "MAGNET_URL": "https://dl.bookfunnel.com/w8akj9mgc4",
+    "POSTAL_ADDRESS": "Natchez Press LLC · 2000 Mallory Ln, Suite 290 #1075 · Franklin, TN 37067"
   },
   "triggers": {
     // Daily at 13:00 UTC (7 a.m. Central in winter, 8 a.m. in summer): the Monday digest.
@@ -41,7 +44,9 @@
       "POSTING_ENABLED": "true",
       "DEV_MODE": "true",
       "SITE_URL": "https://wall-your-dogs-journey.brock-535.workers.dev",
-      "CONTACT_EMAIL": "admin@brockalston.com"
+      "CONTACT_EMAIL": "admin@brockalston.com",
+      "MAGNET_URL": "https://dl.bookfunnel.com/w8akj9mgc4",
+      "POSTAL_ADDRESS": "Natchez Press LLC · 2000 Mallory Ln, Suite 290 #1075 · Franklin, TN 37067"
     },
     "d1_databases": [
       { "binding": "DB", "database_name": "dedication-wall-preview", "database_id": "b1ff3d27-18e3-4302-961f-6ab378486e87", "migrations_dir": "migrations" }

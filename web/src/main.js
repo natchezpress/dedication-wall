@@ -133,6 +133,7 @@ $('#photo').addEventListener('change', async (ev) => {
     state.photo = { img, file, view: { scale: 1, dx: 0, dy: 0 } };
     $('#zoom').value = '1';
     $('#photo-label').textContent = 'Change photo';
+    idbSet('photo', file); saveDraftNow();
     track('photo_added');
     draw();
     document.querySelector('#step-words')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -236,6 +237,160 @@ for (const which of ['story', 'feed', 'card']) {
   $(`#dl-${which}`).addEventListener('click', async () => { download(await makeFile(which)); track('downloaded', { cut: which }); });
 }
 
+// ---------- post it to the wall ----------
+// The maker keeps a draft (fields + the original photo) in this browser so a reload after the
+// sign-in link, or a tab the phone threw away, lands back on the same dedication.
+const DRAFT_KEY = 'dw_draft_v1';
+function idb() {
+  return new Promise((res, rej) => {
+    try {
+      const r = indexedDB.open('dw', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    } catch (e) { rej(e); }
+  });
+}
+async function idbSet(key, value) {
+  try { const db = await idb(); await new Promise((res, rej) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(value, key); t.oncomplete = res; t.onerror = () => rej(t.error); }); } catch { /* no storage */ }
+}
+async function idbGet(key) {
+  try { const db = await idb(); return await new Promise((res, rej) => { const t = db.transaction('kv', 'readonly'); const q = t.objectStore('kv').get(key); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); } catch { return undefined; }
+}
+async function idbDel(key) {
+  try { const db = await idb(); await new Promise((res) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').delete(key); t.oncomplete = res; t.onerror = res; }); } catch { /* ignore */ }
+}
+let draftTimer = 0;
+function saveDraftNow() {
+  clearTimeout(draftTimer);
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ mode: state.mode, name: state.name, line: state.line, bg: state.bg?.id, view: state.photo?.view || null, t: Date.now() }));
+  } catch { /* no storage */ }
+}
+function saveDraft() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(saveDraftNow, 300);
+}
+window.addEventListener('pagehide', saveDraftNow);
+async function restoreDraft() {
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch { d = null; }
+  if (!d || Date.now() - (d.t || 0) > 24 * 3600 * 1000) return;
+  if (d.mode === 'inMemory') { document.querySelector('input[name="mode"][value="inMemory"]').checked = true; state.mode = 'inMemory'; }
+  if (d.name) { $('#name').value = d.name; state.name = d.name; }
+  if (d.line) { $('#line').value = d.line; state.line = d.line; $('#count').textContent = `${d.line.length} / 120`; }
+  const bg = d.bg && state.manifest.backgrounds.find((e) => e.id === d.bg);
+  if (bg) await selectBackground(bg);
+  const file = await idbGet('photo');
+  if (file instanceof Blob) {
+    try {
+      const img = await loadImage(URL.createObjectURL(file));
+      state.photo = { img, file, view: d.view || { scale: 1, dx: 0, dy: 0 } };
+      $('#zoom').value = String(Math.min(3, Math.max(1, state.photo.view.scale)));
+      $('#photo-label').textContent = 'Change photo';
+    } catch { /* unreadable */ }
+  }
+  draw();
+}
+function clearDraft() { try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } idbDel('photo'); }
+
+const post = { config: null, email: '', poll: 0 };
+const postStatus = (t, html = false) => { const el = $('#post-status'); if (html) el.innerHTML = t; else el.textContent = t; };
+
+function showSignedIn(email) {
+  post.email = email;
+  $('#post-signin').hidden = true;
+  $('#post-form').hidden = false;
+  $('#post-who').textContent = email;
+  $('#post-dog').textContent = state.name.trim() || 'my dog';
+  clearInterval(post.poll); post.poll = 0;
+}
+
+async function fetchConfig() {
+  try { const r = await fetch('/api/config', { cache: 'no-store' }); return r.ok ? await r.json() : null; } catch { return null; }
+}
+
+function startPolling() {
+  clearInterval(post.poll);
+  const until = Date.now() + 15 * 60 * 1000;
+  post.poll = setInterval(async () => {
+    if (Date.now() > until) { clearInterval(post.poll); return; }
+    const c = await fetchConfig();
+    if (c?.signed_in) showSignedIn(c.signed_in);
+  }, 3000);
+}
+
+$('#post-link').addEventListener('click', async () => {
+  const email = $('#post-email').value.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { postStatus('A real email, please; the link goes there.'); return; }
+  if (!state.name.trim() || !state.line.trim()) { postStatus('Give your dog a name and a line first (step 2).'); return; }
+  if (!state.photo?.file) { postStatus('Add a photo first (step 1).'); return; }
+  await idbSet('photo', state.photo.file); saveDraftNow();
+  postStatus('Sending…');
+  try {
+    const r = await fetch('/api/auth/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, next: '/#step-post' }) });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || String(r.status));
+    track('post_link_sent');
+    if (j.dev_link) {
+      postStatus(`Test site: no email is sent. <a class="dev-link" href="${j.dev_link}" target="_blank" rel="noopener">Open the sign-in link</a>, then come back here.`, true);
+    } else {
+      postStatus(`We emailed a sign-in link to ${email}. Tap it on this phone, then come back here; this page will notice.`);
+    }
+    startPolling();
+  } catch (e) {
+    postStatus(`Couldn’t send the link (${e.message}). Try again in a minute.`);
+  }
+});
+
+$('#post-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const status = $('#post-form-status');
+  if (!$('#post-attest').checked) { status.textContent = 'The first box is required: 18 or older, and your dog or your permission.'; return; }
+  if (!$('#post-show').checked) { status.textContent = 'Tick “Show on the public wall” to post; that is what posting is.'; return; }
+  if (!state.photo?.file || !state.name.trim() || !state.line.trim() || !state.bg) { status.textContent = 'A photo, a name, a line and a background are all needed.'; return; }
+  const btn = $('#post-submit'); btn.disabled = true; status.textContent = 'Making the page…';
+  try {
+    const [story, feed, card] = await Promise.all([makeFile('story'), makeFile('feed'), makeFile('card')]);
+    const fd = new FormData();
+    fd.set('dog_name', state.name.trim()); fd.set('line', state.line.trim());
+    fd.set('mode', state.mode === 'inMemory' ? 'in_memory' : 'for');
+    fd.set('background_id', state.bg.id);
+    fd.set('attest', 'on'); fd.set('newsletter', $('#post-news').checked ? 'on' : 'off');
+    fd.set('original', state.photo.file, state.photo.file.name || 'original.jpg');
+    fd.set('story', story); fd.set('feed', feed); fd.set('card', card);
+    status.textContent = 'Posting…';
+    const r = await fetch('/api/post', { method: 'POST', body: fd });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401) { status.textContent = 'Your sign-in expired. Ask for a new link.'; $('#post-form').hidden = true; $('#post-signin').hidden = false; return; }
+    if (!r.ok || !j.ok) throw new Error(j.error || String(r.status));
+    track('posted', { newsletter: $('#post-news').checked });
+    $('#post-form').hidden = true;
+    $('#done-dog').textContent = state.name.trim();
+    $('#done-email').textContent = post.email;
+    const a = $('#done-url'); a.href = j.url; a.textContent = j.url.replace(/^https?:\/\//, '');
+    $('#post-done').hidden = false;
+    $('#post-done').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    clearDraft();
+  } catch (e) {
+    status.textContent = `Couldn’t post (${e.message}). Nothing was saved; try again.`;
+  } finally { btn.disabled = false; }
+});
+$('#done-again').addEventListener('click', () => { location.href = '/'; });
+
+async function initPost() {
+  post.config = await fetchConfig();
+  const sec = $('#step-post');
+  if (!post.config?.posting) { sec.hidden = true; return; }
+  sec.hidden = false;
+  if (post.config.signed_in) showSignedIn(post.config.signed_in);
+  if (location.hash === '#step-post') setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+}
+for (const id of ['#name', '#line']) $(id).addEventListener('input', saveDraft);
+document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener('change', saveDraft));
+$('#zoom').addEventListener('change', saveDraft);
+preview.addEventListener('pointerup', saveDraft);
+
 // ---------- request a background ----------
 $('#request-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
@@ -264,8 +419,11 @@ async function boot() {
   const def = state.manifest.backgrounds.find((e) => e.default) || state.manifest.backgrounds[0];
   await selectBackground(def);
   if (!visibleEntries('today').length) { state.group = 'always'; renderTabs(); renderGrid(); }
+  await restoreDraft();
+  renderTabs(); renderGrid();
   draw();
   window.addEventListener('resize', draw);
   document.fonts?.ready?.then(draw);
+  initPost();
 }
 boot();

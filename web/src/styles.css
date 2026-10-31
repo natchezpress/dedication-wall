@@ -93,6 +93,15 @@ textarea { resize: vertical; }
 .actions { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
 .actions .primary { grid-column: 1 / -1; }
 .request form { display: grid; gap: 4px; }
+.check { display: flex; gap: 12px; align-items: flex-start; margin: 0 0 12px; font-size: 17px; line-height: 1.4; }
+.check input { flex: none; width: 22px; height: 22px; margin: 2px 0 0; accent-color: var(--navy); }
+#post-form { display: grid; gap: 4px; margin-top: 14px; }
+#post-form .primary { justify-self: start; }
+.done { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; margin-top: 12px; }
+.done p { margin: 0 0 10px; }
+.done-title { font-size: 22px; }
+.actions-inline { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.dev-link { display: inline-block; margin-top: 8px; font-family: var(--sans); font-size: 14px; }
 .bottom { text-align: center; color: var(--quiet); font-size: 15px; padding-bottom: 48px; }
 @media (min-width: 720px) {
   .maker { display: grid; grid-template-columns: 300px 1fr; gap: 28px; align-items: start; }

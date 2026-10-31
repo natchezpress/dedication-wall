@@ -22,6 +22,7 @@ export default {
       if (p.startsWith('/d/') && request.method === 'GET') return dog(env, request, p.slice(3));
       if (p.startsWith('/p/') && request.method === 'GET') return photo(env, request, p.slice(3));
       if (p.startsWith('/i/') && request.method === 'GET') return invite(env, request, p.slice(3));
+      if (p.startsWith('/u/') && request.method === 'GET') return unsubscribe(env, request, p.slice(3), url);
       if (p === '/privacy') return Response.redirect('https://brockalston.com/privacy-policy', 302);
       if (p === '/terms') return Response.redirect('https://brockalston.com/terms-of-use', 302);
 
@@ -36,6 +37,7 @@ export default {
       if (p === '/api/post' && request.method === 'POST') return post(env, request, ctx);
       if (p === '/api/mine' && request.method === 'GET') return mine(env, request);
       if (p === '/api/remove' && request.method === 'POST') return remove(env, request);
+      if (p === '/api/invite' && request.method === 'POST') return sendInvites(env, request);
       if (p.startsWith('/api/admin')) return admin(env, request, url);
       if (p.startsWith('/api/')) return bad('no such route', 404);
 
@@ -68,6 +70,11 @@ async function settings(env) {
 const postingOn = (env) => String(env.POSTING_ENABLED) === 'true';
 const devMode = (env) => String(env.DEV_MODE) === 'true';
 const site = (env) => env.SITE_URL || 'https://dedication.jetsonsjourney.com';
+const secret = (env) => env.SESSION_SECRET || 'dev';
+const MAX_INVITES = 5;                 // per dedication, for its lifetime
+const inviteKey = (env, id) => sha256(`${secret(env)}|invite|${id}`);
+const inviteeHash = (env, email) => sha256(`${secret(env)}|invitee|${email}`);
+const unsubSig = async (env, hash) => (await sha256(`${secret(env)}|unsub|${hash}`)).slice(0, 24);
 
 async function health(env) {
   const t = await env.DB.prepare('SELECT COUNT(*) AS n FROM entries').first();
@@ -194,11 +201,93 @@ async function screenAndPublish(env, id) {
 async function notifyLive(env, e) {
   const page = `${site(env)}/d/${e.id}`;
   const inviteUrl = `${site(env)}/i/${e.invite_code}`;
-  const removeUrl = `${site(env)}/api/remove?id=${e.id}&key=${await sha256(`${env.SESSION_SECRET || 'dev'}|remove|${e.id}`)}`;
+  const inviteForm = `${page}?k=${await inviteKey(env, e.id)}`;
+  const removeUrl = `${site(env)}/api/remove?id=${e.id}&key=${await sha256(`${secret(env)}|remove|${e.id}`)}`;
   await sendMail(env, { to: e.owner_email, kind: 'live', entry_id: e.id,
     subject: `${e.dog_name} is on the wall`,
-    text: `${e.dog_name}’s dedication is live:\n${page}\n\nShare this link so friends can see it and leave a heart:\n${inviteUrl}\n\nTo take it down at any time:\n${removeUrl}`,
-    html: `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>` });
+    text: `${e.dog_name}’s dedication is live:\n${page}\n\nShare this link so friends can see it and leave a heart:\n${inviteUrl}\n\nInvite up to five friends by email (we send one short note and keep no addresses):\n${inviteForm}\n\nTo take it down at any time:\n${removeUrl}`,
+    html: `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>` });
+}
+
+// ---------------------------------------------------------------- email invites
+// Up to five addresses per dedication, from the owner (session or the signed link in the "live" email),
+// live entries only. Nothing about the invitee is stored: a salted hash in invite_sends and, if they ask,
+// in suppressed. The copy is fixed; the owner cannot add a message.
+async function sendInvites(env, request) {
+  const form = await request.formData().catch(() => null);
+  if (!form) return bad('expected form data');
+  const id = String(form.get('id') || '').replace(/[^a-z0-9]/g, '');
+  const k = String(form.get('k') || '');
+  const e = await env.DB.prepare('SELECT * FROM entries WHERE id = ?').bind(id).first();
+  if (!e) return bad('not found', 404);
+  let allowed = k && k === (await inviteKey(env, id));
+  if (!allowed) {
+    const sess = await requireSession(env, request);
+    allowed = !!(sess && sess.email === e.owner_email);
+  }
+  if (!allowed) return bad('not allowed', 403);
+  const back = `${site(env)}/d/${id}${k ? `?k=${k}` : ''}`;
+  if (e.status !== 'live') return Response.redirect(`${back}${k ? '&' : '?'}msg=notlive`, 303);
+
+  const raw = String(form.get('emails') || '');
+  const wanted = [...new Set(raw.split(/[\s,;]+/).map((s) => s.trim().toLowerCase()).filter(validEmail))].slice(0, MAX_INVITES);
+  const sentBefore = (await env.DB.prepare('SELECT COUNT(*) AS n FROM invite_sends WHERE entry_id = ?').bind(id).first()).n;
+  let left = Math.max(0, MAX_INVITES - sentBefore);
+  let sent = 0, skipped = 0;
+  for (const email of wanted) {
+    if (left <= 0) { skipped++; continue; }
+    if (email === e.owner_email) { skipped++; continue; }
+    const hash = await inviteeHash(env, email);
+    const dup = await env.DB.prepare('SELECT 1 FROM invite_sends WHERE entry_id = ? AND to_hash = ?').bind(id, hash).first();
+    const sup = await env.DB.prepare('SELECT 1 FROM suppressed WHERE to_hash = ?').bind(hash).first();
+    if (dup || sup) { skipped++; continue; }
+    const unsub = `${site(env)}/u/${hash}?s=${await unsubSig(env, hash)}`;
+    const r = await sendMail(env, { ...inviteMail(env, e, unsub), to: email, kind: 'invite', entry_id: id, logTo: `invitee:${hash.slice(0, 16)}` });
+    if (r.status === 'failed') { skipped++; continue; }
+    await env.DB.prepare('INSERT OR IGNORE INTO invite_sends (entry_id, to_hash, sent_at) VALUES (?,?,?)').bind(id, hash, now()).run();
+    sent++; left--;
+  }
+  const wantsJson = (request.headers.get('accept') || '').includes('application/json');
+  if (wantsJson) return json({ ok: true, sent, skipped, left });
+  return Response.redirect(`${back}${k ? '&' : '?'}sent=${sent}&skipped=${skipped}`, 303);
+}
+
+function inviteMail(env, e, unsub) {
+  const dog = e.dog_name;
+  const page = `${site(env)}/i/${e.invite_code}`;
+  const magnet = env.MAGNET_URL || 'https://www.brockalston.com';
+  const addr = env.POSTAL_ADDRESS || 'Natchez Press LLC, Franklin, Tennessee';
+  const text = `Someone you know made a dedication for their dog, ${dog}, on the Dedication Wall: the kind a novelist writes to the dog who got them through.
+
+See ${dog}’s page and leave a heart:
+${page}
+
+Make one for your own dog. Free, a minute, on your phone:
+${site(env)}/
+
+Dog people who read: get Riverspook, a free novella from the world of Jetson’s Journey, when you join Brock Alston’s letters:
+${magnet}
+
+This one-time note was sent at the request of ${dog}’s person. We did not keep your address; we remember only not to write again if you ask:
+${unsub}
+
+${addr}`;
+  const html = `<div style="font-family:Georgia,serif;font-size:17px;line-height:1.5;color:#2b2622">
+<p>Someone you know made a dedication for their dog, <strong>${h(dog)}</strong>, on the Dedication Wall: the kind a novelist writes to the dog who got them through.</p>
+<p><a href="${page}" style="display:inline-block;background:#1f2a44;color:#fff;text-decoration:none;padding:11px 18px;border-radius:999px">See ${h(dog)}’s page and leave a heart</a></p>
+<p>Make one for your own dog. Free, a minute, on your phone: <a href="${site(env)}/">${h(site(env).replace(/^https?:\/\//, ''))}</a></p>
+<p>Dog people who read: get <em>Riverspook</em>, a free novella from the world of <em>Jetson’s Journey</em>, when you join Brock Alston’s letters: <a href="${magnet}">${h(magnet)}</a></p>
+<p style="color:#6f665d;font-size:13px">This one-time note was sent at the request of ${h(dog)}’s person. We did not keep your address; we remember only not to write again if you ask: <a href="${unsub}">don’t email me again</a>.<br>${h(addr)}</p>
+</div>`;
+  return { subject: `A dedication for ${dog}`, text, html };
+}
+
+async function unsubscribe(env, request, hash, url) {
+  hash = hash.replace(/[^a-f0-9]/g, '');
+  const s = url.searchParams.get('s') || '';
+  if (!hash || s !== (await unsubSig(env, hash))) return html(notFoundPage(), 404);
+  await env.DB.prepare('INSERT OR IGNORE INTO suppressed (to_hash, added_at) VALUES (?,?)').bind(hash, now()).run();
+  return html(simplePage({ title: 'Done', bodyHtml: '<p>You won’t get another email from the Dedication Wall. We never had your address on file; now we also remember not to send.</p>', noindex: true }));
 }
 
 async function subscribeNewsletter(env, email) {
@@ -256,18 +345,38 @@ async function wall(env, request, memory) {
 
 async function dog(env, request, id) {
   id = id.replace(/[^a-z0-9]/g, '');
+  const url = new URL(request.url);
   const e = await env.DB.prepare('SELECT * FROM entries WHERE id = ?').bind(id).first();
-  if (!e || e.status !== 'live') return html(notFoundPage(), 404);
-  const vh = await visitorHash(request, env.SESSION_SECRET || 'dev');
+  if (!e) return html(notFoundPage(), 404);
+  // The owner may see a pending page (to check it); everyone else only a live one.
+  const k = url.searchParams.get('k') || '';
+  let owner = k && k === (await inviteKey(env, id));
+  if (!owner) { const sess = await requireSession(env, request); owner = !!(sess && sess.email === e.owner_email); }
+  if (e.status !== 'live' && !(owner && e.status === 'pending')) return html(notFoundPage(), 404);
+  const vh = await visitorHash(request, secret(env));
   const hearted = !!(await env.DB.prepare('SELECT 1 FROM hearts WHERE entry_id = ? AND visitor_hash = ? AND day = ?').bind(id, vh, centralDay()).first());
-  return html(dogPage({ e, site: site(env), hearted }), 200, { 'cache-control': 'public, max-age=60' });
+  let invite = null;
+  if (owner) {
+    const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM invite_sends WHERE entry_id = ?').bind(id).first()).n;
+    invite = { key: k || (await inviteKey(env, id)), left: Math.max(0, MAX_INVITES - n), max: MAX_INVITES,
+      sent: url.searchParams.get('sent'), skipped: url.searchParams.get('skipped'), msg: url.searchParams.get('msg'), pending: e.status === 'pending' };
+  }
+  const headers = owner ? { 'cache-control': 'no-store' } : { 'cache-control': 'public, max-age=60' };
+  return html(dogPage({ e, site: site(env), hearted, owner: invite }), 200, headers);
 }
 
 async function photo(env, request, rest) {
   const m = /^([a-z0-9]+)\/(story|feed|card)\.jpg$/.exec(rest);
   if (!m) return new Response('not found', { status: 404 });
-  const e = await env.DB.prepare('SELECT status, story_key, feed_key, card_key FROM entries WHERE id = ?').bind(m[1]).first();
-  if (!e || e.status !== 'live') return new Response('not found', { status: 404 });
+  const e = await env.DB.prepare('SELECT status, owner_email, story_key, feed_key, card_key FROM entries WHERE id = ?').bind(m[1]).first();
+  if (!e) return new Response('not found', { status: 404 });
+  if (e.status !== 'live') {
+    // the owner may preview a pending entry's images (signed key or session); nobody else
+    const k = new URL(request.url).searchParams.get('k') || '';
+    let owner = e.status === 'pending' && k && k === (await inviteKey(env, m[1]));
+    if (!owner && e.status === 'pending') { const sess = await requireSession(env, request); owner = !!(sess && sess.email === e.owner_email); }
+    if (!owner) return new Response('not found', { status: 404 });
+  }
   const key = { story: e.story_key, feed: e.feed_key, card: e.card_key }[m[2]];
   const obj = await env.PHOTOS.get(key);
   if (!obj) return new Response('not found', { status: 404 });
@@ -316,12 +425,15 @@ async function requestBackground(env, request) {
 }
 
 // ---------------------------------------------------------------- admin (token in header or ?token=, then cookie)
+// With no ADMIN_TOKEN set, a DEV_MODE deployment (local, branch previews) accepts "dev"; production never does.
+const adminToken = (env) => env.ADMIN_TOKEN || (devMode(env) ? 'dev' : null);
 async function adminAuth(env, request, url) {
-  if (!env.ADMIN_TOKEN) return false;
+  const tok = adminToken(env);
+  if (!tok) return false;
   const t = request.headers.get('x-admin-token') || url.searchParams.get('token');
-  if (t && t === env.ADMIN_TOKEN) return true;
+  if (t && t === tok) return true;
   const m = /(?:^|;\s*)dw_admin=([^;]+)/.exec(request.headers.get('cookie') || '');
-  return !!(m && m[1] === (await sha256(`${env.ADMIN_TOKEN}|admin`)));
+  return !!(m && m[1] === (await sha256(`${tok}|admin`)));
 }
 
 async function admin(env, request, url) {
@@ -389,7 +501,7 @@ async function adminPage(env, request, url) {
     return html(simplePage({ title: 'Admin', bodyHtml: '<p>Admin token needed. Open this page with <code>?token=…</code> once; a cookie keeps you signed in.</p>', noindex: true }), 401);
   }
   const headers = {};
-  if (url.searchParams.get('token')) headers['set-cookie'] = `dw_admin=${await sha256(`${env.ADMIN_TOKEN}|admin`)}; Path=/; Max-Age=${90 * 86400}; HttpOnly; SameSite=Lax; Secure`;
+  if (url.searchParams.get('token')) headers['set-cookie'] = `dw_admin=${await sha256(`${adminToken(env)}|admin`)}; Path=/; Max-Age=${90 * 86400}; HttpOnly; SameSite=Lax; Secure`;
   const s = await settings(env);
   const { results: queue } = await env.DB.prepare('SELECT id, dog_name, line, mode, owner_email, screen_result, created_at, is_test FROM entries WHERE status = \'pending\' ORDER BY created_at ASC LIMIT 50').all();
   const body = `

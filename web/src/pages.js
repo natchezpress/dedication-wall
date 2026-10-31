@@ -39,6 +39,10 @@ h1 a{text-decoration:none;color:inherit}
 footer{margin-top:40px;padding-top:16px;border-top:1px solid #e3d9c7;font-family:var(--sans);font-size:13px;color:var(--quiet);display:flex;gap:14px;flex-wrap:wrap}
 footer a{color:var(--quiet)}
 .prose{max-width:760px}.prose h2{font-size:22px;font-weight:500;margin:28px 0 8px}.prose p{margin:0 0 12px}
+.owner{background:#fff;border:1px solid #e3d9c7;border-radius:12px;padding:14px 16px;margin:14px 0}
+.owner .lab{font-family:var(--sans);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);margin-bottom:6px}
+.owner p{margin:0 0 8px}
+.owner textarea{width:100%;font:inherit;font-size:16px;padding:10px 12px;border:1px solid #e3d9c7;border-radius:10px;background:#fff;color:var(--ink);resize:vertical}
 `;
 
 function layout({ title, description, image, url, body, nav = '', noindex = false }) {
@@ -97,27 +101,47 @@ ${entries.length ? `<div class="grid">${entries.map(cardHtml).join('')}</div>` :
   return layout({ title, description, url: `${site}${memory ? '/memory' : '/wall'}`, body, nav: nav(memory ? '/memory' : '/wall') });
 }
 
-export function dogPage({ e, site, hearted = false, invite = true }) {
+// owner: null for visitors; for the dog's person {key, left, max, sent, skipped, msg, pending}.
+export function dogPage({ e, site, hearted = false, owner = null }) {
   const modeText = e.mode === 'in_memory' ? 'In memory of' : 'For';
   const title = `${modeText} ${e.dog_name} · Every Dog Deserves a Dedication`;
   const description = e.line;
   const image = `${site}/p/${e.id}/card.jpg`;
+  const q = owner?.pending ? `?k=${h(owner.key)}` : '';
+  let ownerHtml = '';
+  if (owner) {
+    const note = owner.msg === 'notlive' ? 'Invitations go out once the page is live.'
+      : owner.sent != null ? `Sent ${h(owner.sent)}${Number(owner.skipped) ? `; ${h(owner.skipped)} skipped (already invited, asked not to be emailed, or over the limit)` : ''}.` : '';
+    ownerHtml = `
+<div class="owner">
+  <div class="lab">${owner.pending ? 'Only you can see this page until it is published' : 'Your page'}</div>
+  ${owner.pending ? '<p class="small">We look at every post before it goes up, usually within a day. You’ll get an email when it’s live.</p>' : `
+  <p><strong>Invite friends by email.</strong> Up to ${owner.max} per dedication, ${owner.left} left. We send one short note with this page and a heart to leave; we keep no addresses.</p>
+  ${owner.left > 0 ? `<form method="post" action="/api/invite">
+    <input type="hidden" name="id" value="${h(e.id)}" /><input type="hidden" name="k" value="${h(owner.key)}" />
+    <textarea name="emails" rows="3" placeholder="friend@example.com, another@example.com" required></textarea>
+    <div class="row"><button class="btn" type="submit">Send invitations</button>${note ? `<span class="small">${note}</span>` : ''}</div>
+  </form>` : `<p class="small">${note || 'All five invitations have been sent.'}</p>`}
+  <p class="small">Share link that counts visits: <a href="/i/${h(e.invite_code)}">${h(site.replace(/^https?:\/\//, ''))}/i/${h(e.invite_code)}</a></p>`}
+</div>`;
+  }
   const body = `
 <div class="dog">
-  <img class="story" src="/p/${h(e.id)}/story.jpg" alt="${h(e.dog_name)}’s dedication page" />
+  <img class="story" src="/p/${h(e.id)}/story.jpg${q}" alt="${h(e.dog_name)}’s dedication page" />
   <div class="words">
     <div class="mode">${modeText}</div>
     <div class="dogname">${h(e.dog_name)}</div>
     <p class="line">${h(e.line)}</p>
     <div class="row">
-      <form method="post" action="/api/heart" style="display:inline"><input type="hidden" name="entry_id" value="${h(e.id)}" /><button class="btn${hearted ? ' quiet' : ''}" type="submit"${hearted ? ' disabled' : ''}>♥ ${hearted ? 'Hearted today' : 'Heart this dog'} · ${e.hearts}</button></form>
+      <form method="post" action="/api/heart" style="display:inline"><input type="hidden" name="entry_id" value="${h(e.id)}" /><button class="btn${hearted ? ' quiet' : ''}" type="submit"${hearted || owner?.pending ? ' disabled' : ''}>♥ ${hearted ? 'Hearted today' : 'Heart this dog'} · ${e.hearts}</button></form>
       <a class="btn quiet" href="/">Make one for your dog</a>
     </div>
-    ${invite ? `<p class="small">Share this page: <a href="/d/${h(e.id)}">${h(site.replace(/^https?:\/\//, ''))}/d/${h(e.id)}</a></p>` : ''}
+    <p class="small">Share this page: <a href="/d/${h(e.id)}">${h(site.replace(/^https?:\/\//, ''))}/d/${h(e.id)}</a></p>
+    ${ownerHtml}
     <p class="small">Posted ${h(centralDateTime(e.live_at || e.created_at))}. Something wrong with this page? <a href="mailto:admin@brockalston.com?subject=Dedication%20${h(e.id)}">Tell us</a>.</p>
   </div>
 </div>`;
-  return layout({ title, description, image, url: `${site}/d/${e.id}`, body, nav: nav(e.mode === 'in_memory' ? '/memory' : '/wall') });
+  return layout({ title, description, image, url: `${site}/d/${e.id}`, body, nav: nav(e.mode === 'in_memory' ? '/memory' : '/wall'), noindex: !!owner?.pending });
 }
 
 export function simplePage({ title, description = title, bodyHtml, site, path, noindex = false }) {
