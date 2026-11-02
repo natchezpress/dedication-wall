@@ -246,11 +246,11 @@ $('#request-form').addEventListener('submit', async (ev) => {
   try {
     const r = await fetch('/api/request', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, email }) });
     if (!r.ok) throw new Error(String(r.status));
-    status.textContent = 'Got it. We’ll email you when it goes live.';
+    status.textContent = 'Got it. I will email you when it goes live.';
     ev.target.reset();
     track('request_sent');
   } catch {
-    status.innerHTML = 'Couldn’t send just now. <a href="mailto:brock@natchezpress.com?subject=Background%20request&body=' + encodeURIComponent(text) + '">Email it instead</a>.';
+    status.innerHTML = 'Couldn’t send just now. <a href="mailto:admin@brockalston.com?subject=Background%20request&body=' + encodeURIComponent(text) + '">Email it instead</a>.';
   }
 });
 
