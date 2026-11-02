@@ -98,21 +98,22 @@ function drawFooter(ctx, yTop) {
   ctx.textBaseline = 'alphabetic';
   if (dark) { ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = 14; }
   ctx.fillStyle = dark ? 'rgba(255,250,240,0.92)' : 'rgba(43,38,34,0.85)';
-  ctx.font = `italic 400 38px ${SERIF}`;
-  ctx.fillText(FOOTER_LINE, MASTER.w / 2, yTop + 36);
-  ctx.font = `400 32px ${SERIF}`;
+  ctx.font = `italic 400 46px ${SERIF}`;
+  ctx.fillText(FOOTER_LINE, MASTER.w / 2, yTop + 40);
+  ctx.font = `400 36px ${SERIF}`;
   ctx.fillStyle = dark ? 'rgba(255,250,240,0.78)' : 'rgba(43,38,34,0.65)';
-  ctx.fillText(SITE, MASTER.w / 2, yTop + 86);
+  ctx.fillText(SITE, MASTER.w / 2, yTop + 94);
   ctx.shadowBlur = 0;
 }
 
 function drawTextBlock(ctx, d, x, w, centerY, align = 'left', ink = INK, quiet = QUIET) {
-  const modeLabel = d.mode === 'inMemory' ? 'IN MEMORY OF' : 'FOR';
+  const modeLabel = d.mode === 'inMemory' ? 'IN MEMORY OF' : 'TO';
   const name = (d.name || 'Your dog').trim();
   const line = (d.line || '').trim();
-  const nameFit = fitLines(ctx, name, w, 2, 104, 64, 600);
-  const lineFit = line ? fitLines(ctx, line, w, 6, 54, 34, 400, 'italic') : { size: 54, lines: [] };
-  const labelSize = 34, gap1 = 22, gap2 = 34;
+  const nameFit = fitLines(ctx, name, w, 2, 112, 64, 600);
+  // A short line earns a bigger size; a long one shrinks until it fits in six lines.
+  const lineFit = line ? fitLines(ctx, line, w, 6, 80, 40, 400, 'italic') : { size: 80, lines: [] };
+  const labelSize = 40, gap1 = 24, gap2 = 36;
   const nameLH = Math.round(nameFit.size * 1.1), lineLH = Math.round(lineFit.size * 1.32);
   const total = labelSize + gap1 + nameFit.lines.length * nameLH + (lineFit.lines.length ? gap2 + lineFit.lines.length * lineLH : 0);
   let y = centerY - total / 2;
