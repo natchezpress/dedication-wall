@@ -1,9 +1,59 @@
 {
-  // Cloudflare Workers deploy config: static assets only for now; the wall's API joins later as "main".
+  // Cloudflare Workers deploy config for the Dedication Maker and Wall.
+  // Built by Workers Builds on every push (root web/, `npm run build`, `npx wrangler deploy` on main,
+  // `npx wrangler preview` on every other branch). The static maker is served from ./dist through the
+  // ASSETS binding; worker.js answers everything else.
   "name": "your-dogs-journey",
+  "main": "src/worker.js",
   "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // Let the Worker run first for API and wall routes; static files still win for everything else.
+    "run_worker_first": ["/api/*", "/d/*", "/wall", "/memory", "/i/*", "/u/*", "/privacy", "/terms", "/admin", "/admin/*", "/p/*"]
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "dedication-wall", "database_id": "fbcce2c7-8c87-4c26-8b60-f0f255407ec0", "preview_database_id": "b1ff3d27-18e3-4302-961f-6ab378486e87", "migrations_dir": "migrations" }
+  ],
+  "r2_buckets": [
+    { "binding": "PHOTOS", "bucket_name": "dedication-photos" }
+  ],
+  "vars": {
+    // Posting stays off on the live site until the wall passes its test (design doc, schedule gate Nov 23).
+    "POSTING_ENABLED": "false",
+    // DEV_MODE returns the sign-in link in the API response when no mail key is set; never true in production.
+    "DEV_MODE": "false",
+    "SITE_URL": "https://dedication.jetsonsjourney.com",
+    "CONTACT_EMAIL": "admin@brockalston.com",
+    // The sign-up offer in invite emails (decision 6): the Riverspook reader magnet on BookFunnel.
+    "MAGNET_URL": "https://dl.bookfunnel.com/w8akj9mgc4",
+    "POSTAL_ADDRESS": "Natchez Press LLC · 2000 Mallory Ln, Suite 290 #1075 · Franklin, TN 37067"
+  },
+  "triggers": {
+    // Daily at 13:00 UTC (7 a.m. Central in winter, 8 a.m. in summer): the Monday digest.
+    "crons": ["0 13 * * *"]
+  },
+  "observability": { "enabled": true },
+
+  // Branch previews (wall-your-dogs-journey.brock-535.workers.dev and the like) get their own storage,
+  // so test dogs never touch the real wall. Migrations for the preview database run from scripts/migrate.mjs.
+  "previews": {
+    "vars": {
+      "POSTING_ENABLED": "true",
+      "DEV_MODE": "true",
+      "SITE_URL": "https://wall-your-dogs-journey.brock-535.workers.dev",
+      "CONTACT_EMAIL": "admin@brockalston.com",
+      "MAGNET_URL": "https://dl.bookfunnel.com/w8akj9mgc4",
+      "POSTAL_ADDRESS": "Natchez Press LLC · 2000 Mallory Ln, Suite 290 #1075 · Franklin, TN 37067"
+    },
+    "d1_databases": [
+      { "binding": "DB", "database_name": "dedication-wall-preview", "database_id": "b1ff3d27-18e3-4302-961f-6ab378486e87", "migrations_dir": "migrations" }
+    ],
+    "r2_buckets": [
+      { "binding": "PHOTOS", "bucket_name": "dedication-photos-preview" }
+    ],
+    "observability": { "enabled": true }
   }
 }
