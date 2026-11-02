@@ -21,8 +21,8 @@
     { "binding": "PHOTOS", "bucket_name": "dedication-photos" }
   ],
   "vars": {
-    // Posting stays off on the live site until the wall passes its test (design doc, schedule gate Nov 23).
-    "POSTING_ENABLED": "false",
+    // Posting opened on the live site 2026-11-02 (Brock: get it running today). Set to "false" to close it again.
+    "POSTING_ENABLED": "true",
     // DEV_MODE returns the sign-in link in the API response when no mail key is set; never true in production.
     "DEV_MODE": "false",
     "SITE_URL": "https://dedication.jetsonsjourney.com",
