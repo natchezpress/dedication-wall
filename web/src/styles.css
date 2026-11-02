@@ -41,6 +41,10 @@ h2 { font-size: 24px; display: flex; align-items: center; gap: 10px; }
   max-width: 420px;
 }
 .example-label { margin: 0 0 14px; font-family: var(--sans); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--quiet); }
+.example-figure { margin: 0 auto 18px; max-width: 420px; }
+.example-figure img { display: block; width: 100%; height: auto; border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0,0,0,0.18); }
+.example-figure figcaption { margin-top: 10px; color: var(--quiet); font-size: 15px; font-style: italic; }
+.example-figure .example-label { display: block; margin: 0 0 2px; font-style: normal; }
 .example-mode { margin: 0; font-size: 14px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--quiet); }
 .example-name { margin: 4px 0 10px; font-size: 40px; font-weight: 600; }
 .example-line { margin: 0; font-style: italic; font-size: 20px; }
