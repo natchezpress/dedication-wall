@@ -94,7 +94,7 @@ export async function visitorHash(request, secret) {
 // With no RESEND_API_KEY the message is logged as 'dev' and, in DEV_MODE, returned to the caller.
 // logTo: what the notices log records as the recipient (invites log a hash, never the address).
 export async function sendMail(env, { to, subject, text, html: htmlBody, kind, entry_id = null, logTo = null }) {
-  const from = env.MAIL_FROM || 'Every Dog Deserves a Dedication <hello@jetsonsjourney.com>';
+  const from = env.MAIL_FROM || 'Every Dog Deserves a Dedication <hello@dedication.jetsonsjourney.com>';
   let status = 'dev', provider_id = null, detail = null;
   if (env.RESEND_API_KEY) {
     try {
