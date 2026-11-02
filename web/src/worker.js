@@ -71,6 +71,9 @@ const postingOn = (env) => String(env.POSTING_ENABLED) === 'true';
 const devMode = (env) => String(env.DEV_MODE) === 'true';
 const site = (env) => env.SITE_URL || 'https://dedication.jetsonsjourney.com';
 const secret = (env) => env.SESSION_SECRET || 'dev';
+// Production never runs on the 'dev' fallback: without SESSION_SECRET, sign-in, posting and invites refuse.
+const ready = (env) => devMode(env) || !!env.SESSION_SECRET;
+const NOT_READY = () => bad('the wall is not configured yet', 503);
 const MAX_INVITES = 5;                 // per dedication, for its lifetime
 const inviteKey = (env, id) => sha256(`${secret(env)}|invite|${id}`);
 const inviteeHash = (env, email) => sha256(`${secret(env)}|invitee|${email}`);
@@ -83,13 +86,14 @@ async function health(env) {
 
 async function config(env, request) {
   const s = await settings(env);
-  const sess = await readSession(env.SESSION_SECRET || 'dev', request.headers.get('cookie'));
+  const sess = await readSession(secret(env), request.headers.get('cookie'));
   return json({ posting: postingOn(env), terms_version: s.termsVersion, signed_in: sess ? sess.email : null });
 }
 
 // ---------------------------------------------------------------- sign-in by magic link
 async function authLink(env, request, url) {
   if (!postingOn(env) && !devMode(env)) return bad('posting is not open yet', 403);
+  if (!ready(env)) return NOT_READY();
   const body = await request.json().catch(() => ({}));
   const email = String(body.email || '').trim().toLowerCase();
   if (!validEmail(email)) return bad('a valid email is needed');
@@ -118,12 +122,12 @@ async function authVerify(env, request, url) {
     return html(simplePage({ title: 'That link has expired', bodyHtml: '<p>Sign-in links last 15 minutes. <a href="/">Go back and ask for a new one.</a></p>', noindex: true }), 400);
   }
   await env.DB.prepare('UPDATE owners SET magic_token = NULL, token_expires = NULL, last_seen_at = ? WHERE email = ?').bind(now(), email).run();
-  const cookie = sessionCookie(await makeSession(env.SESSION_SECRET || 'dev', email), url.protocol === 'https:');
+  const cookie = sessionCookie(await makeSession(secret(env), email), url.protocol === 'https:');
   return new Response(null, { status: 302, headers: { location: next.startsWith('/') ? next : '/', 'set-cookie': cookie } });
 }
 
 async function requireSession(env, request) {
-  return readSession(env.SESSION_SECRET || 'dev', request.headers.get('cookie'));
+  return readSession(secret(env), request.headers.get('cookie'));
 }
 
 // ---------------------------------------------------------------- posting
@@ -131,6 +135,7 @@ async function requireSession(env, request) {
 // attest (on), newsletter (on|off), test (on|off, DEV only).
 async function post(env, request, ctx) {
   if (!postingOn(env) && !devMode(env)) return bad('posting is not open yet', 403);
+  if (!ready(env)) return NOT_READY();
   const sess = await requireSession(env, request);
   if (!sess) return bad('sign in first', 401);
   const form = await request.formData().catch(() => null);
@@ -188,14 +193,26 @@ async function screenAndPublish(env, id) {
     await env.DB.prepare('UPDATE entries SET status = \'live\', screen_result = ?, screened_at = ?, live_at = ? WHERE id = ?').bind(JSON.stringify(v), t, t, id).run();
     await notifyLive(env, { ...e, live_at: t });
   } else if (v.verdict === 'rejected') {
-    await env.DB.prepare('UPDATE entries SET status = \'rejected\', screen_result = ?, screened_at = ? WHERE id = ?').bind(JSON.stringify(v), t, id).run();
-    await sendMail(env, { to: e.owner_email, kind: 'rejected', entry_id: id, subject: 'About your dedication',
-      text: `Thanks for making a dedication for ${e.dog_name}. We couldn’t post it to the wall as submitted. If you think that’s a mistake, reply to this email and a person will look.`,
-      html: `<p>Thanks for making a dedication for ${h(e.dog_name)}. We couldn’t post it to the wall as submitted. If you think that’s a mistake, reply to this email and a person will look.</p>` });
+    await env.DB.prepare('UPDATE entries SET screen_result = ?, screened_at = ? WHERE id = ?').bind(JSON.stringify(v), t, id).run();
+    await rejectEntry(env, e);
   } else {
     await env.DB.prepare('UPDATE entries SET screen_result = ?, screened_at = ? WHERE id = ?').bind(JSON.stringify(v), t, id).run();
     // stays pending for the admin queue
   }
+}
+
+// Declined: the status changes, the photos are deleted at once, the owner hears why in general terms.
+async function rejectEntry(env, e) {
+  await env.DB.prepare('UPDATE entries SET status = \'rejected\' WHERE id = ?').bind(e.id).run();
+  await deletePhotos(env, e);
+  await sendMail(env, { to: e.owner_email, kind: 'rejected', entry_id: e.id, subject: 'About your dedication',
+    text: `Thanks for making a dedication for ${e.dog_name}. I couldn’t post it to the wall as submitted, and its photo has been deleted. If you think that’s a mistake, reply to this email and I will take a look.`,
+    html: `<p>Thanks for making a dedication for ${h(e.dog_name)}. I couldn’t post it to the wall as submitted, and its photo has been deleted. If you think that’s a mistake, reply to this email and I will take a look.</p>` });
+}
+
+async function deletePhotos(env, e) {
+  try { await env.PHOTOS.delete([e.photo_key, e.story_key, e.feed_key, e.card_key].filter(Boolean)); }
+  catch (err) { console.error('photo delete', e.id, err); }
 }
 
 async function notifyLive(env, e) {
@@ -214,6 +231,7 @@ async function notifyLive(env, e) {
 // live entries only. Nothing about the invitee is stored: a salted hash in invite_sends and, if they ask,
 // in suppressed. The copy is fixed; the owner cannot add a message.
 async function sendInvites(env, request) {
+  if (!ready(env)) return NOT_READY();
   const form = await request.formData().catch(() => null);
   if (!form) return bad('expected form data');
   const id = String(form.get('id') || '').replace(/[^a-z0-9]/g, '');
@@ -315,15 +333,19 @@ async function remove(env, request) {
   if (!id) return bad('id needed');
   const key = url.searchParams.get('key');
   let allowed = false;
-  if (key && key === (await sha256(`${env.SESSION_SECRET || 'dev'}|remove|${id}`))) allowed = true;
+  if (key && key === (await sha256(`${secret(env)}|remove|${id}`))) allowed = true;
   if (!allowed) {
     const sess = await requireSession(env, request);
     const e = await env.DB.prepare('SELECT owner_email FROM entries WHERE id = ?').bind(id).first();
     allowed = !!(sess && e && e.owner_email === sess.email);
   }
   if (!allowed) return bad('not allowed', 403);
-  await env.DB.prepare('UPDATE entries SET status = \'removed\', removed_at = ? WHERE id = ? AND status != \'removed\'').bind(now(), id).run();
-  return html(simplePage({ title: 'Removed', bodyHtml: '<p>The dedication is off the wall. The photo is kept only as long as the Privacy Policy says. <a href="/">Make another any time.</a></p>', noindex: true }));
+  const e = await env.DB.prepare('SELECT * FROM entries WHERE id = ?').bind(id).first();
+  if (e && e.status !== 'removed') {
+    await env.DB.prepare('UPDATE entries SET status = \'removed\', removed_at = ? WHERE id = ?').bind(now(), id).run();
+    await deletePhotos(env, e);
+  }
+  return html(simplePage({ title: 'Removed', bodyHtml: '<p>The dedication is off the wall, and its photos are deleted. <a href="/">Make another any time.</a></p>', noindex: true }));
 }
 
 // ---------------------------------------------------------------- the wall
@@ -393,7 +415,7 @@ async function heart(env, request) {
   if (!id) return bad('entry_id needed');
   const e = await env.DB.prepare('SELECT status FROM entries WHERE id = ?').bind(id).first();
   if (!e || e.status !== 'live') return bad('not found', 404);
-  const vh = await visitorHash(request, env.SESSION_SECRET || 'dev');
+  const vh = await visitorHash(request, secret(env));
   const r = await env.DB.prepare('INSERT OR IGNORE INTO hearts (entry_id, visitor_hash, day) VALUES (?,?,?)').bind(id, vh, centralDay()).run();
   if (r.meta.changes) await env.DB.prepare('UPDATE entries SET hearts = hearts + 1 WHERE id = ?').bind(id).run();
   const wantsJson = (request.headers.get('accept') || '').includes('application/json');
@@ -457,6 +479,8 @@ async function admin(env, request, url) {
     if (to === 'live') {
       await env.DB.prepare('UPDATE entries SET status = \'live\', live_at = COALESCE(live_at, ?) WHERE id = ?').bind(t, id).run();
       if (!e.live_at) await notifyLive(env, { ...e, live_at: t });
+    } else if (to === 'rejected') {
+      await rejectEntry(env, e);
     } else {
       await env.DB.prepare('UPDATE entries SET status = ? WHERE id = ?').bind(to, id).run();
     }
