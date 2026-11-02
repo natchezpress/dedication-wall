@@ -2,7 +2,7 @@
 // Static files (the maker) come from the ASSETS binding; everything under /api, /d, /wall, /memory, /i, /p,
 // /privacy, /terms and /admin is answered here.
 import {
-  now, centralDay, shortId, tokenHex, sha256, makeSession, readSession, sessionCookie,
+  now, centralDay, centralDateTime, shortId, tokenHex, sha256, makeSession, readSession, sessionCookie,
   json, html, bad, escapeHtml as h, validEmail, visitorHash, sendMail, screen,
 } from './lib.js';
 import { wallPage, dogPage, simplePage, notFoundPage } from './pages.js';
@@ -504,16 +504,20 @@ async function adminPage(env, request, url) {
   if (url.searchParams.get('token')) headers['set-cookie'] = `dw_admin=${await sha256(`${adminToken(env)}|admin`)}; Path=/; Max-Age=${90 * 86400}; HttpOnly; SameSite=Lax; Secure`;
   const s = await settings(env);
   const { results: queue } = await env.DB.prepare('SELECT id, dog_name, line, mode, owner_email, screen_result, created_at, is_test FROM entries WHERE status = \'pending\' ORDER BY created_at ASC LIMIT 50').all();
+  const { results: reqs } = await env.DB.prepare('SELECT id, text, email, created_at FROM requests WHERE status = \'new\' ORDER BY created_at DESC LIMIT 50').all();
+  const { results: counts } = await env.DB.prepare('SELECT status, COUNT(*) AS n FROM entries GROUP BY status').all();
   const body = `
 <h2>Queue (${queue.length})</h2>
-${queue.length ? queue.map((e) => `<div class="dotd" style="grid-template-columns:120px 1fr"><img src="/p/${h(e.id)}/card.jpg" onerror="this.style.visibility='hidden'" alt="" /><div><strong>${h(e.dog_name)}</strong> · ${e.mode === 'in_memory' ? 'In memory' : 'For'} · ${h(e.owner_email)}${e.is_test ? ' · TEST' : ''}<br><em>${h(e.line)}</em><br><span class="small">${h(e.screen_result || 'not screened yet')}</span><div class="row"><button class="btn" onclick="decide('${h(e.id)}','live')">Publish</button><button class="btn quiet" onclick="decide('${h(e.id)}','rejected')">Reject</button></div></div></div>`).join('') : '<p class="small">Nothing waiting.</p>'}
+${queue.length ? queue.map((e) => `<div class="dotd" style="grid-template-columns:120px 1fr"><img src="/p/${h(e.id)}/card.jpg" onerror="this.style.visibility='hidden'" alt="" /><div><strong>${h(e.dog_name)}</strong> · ${e.mode === 'in_memory' ? 'In memory' : 'To'} · ${h(e.owner_email)}${e.is_test ? ' · TEST' : ''}<br><em>${h(e.line)}</em><br><span class="small">${h(e.screen_result || 'not screened yet')}</span><div class="row"><button class="btn" onclick="decide('${h(e.id)}','live')">Publish</button><button class="btn quiet" onclick="decide('${h(e.id)}','rejected')">Reject</button></div></div></div>`).join('') : '<p class="small">Nothing waiting.</p>'}
 <h2>Switches</h2>
 <form onsubmit="return saveSettings(event)">
 <p><label>Dog of the day (entry id, blank = automatic) <input name="dog_of_the_day" value="${h(s.dogOfTheDay)}" size="10"/></label></p>
 <p><label>Terms version recorded on new posts <input name="terms_version" value="${h(s.termsVersion)}" size="28"/></label></p>
 <p><button class="btn" type="submit">Save</button> <span class="small" id="saved"></span></p>
 </form>
-<p class="small">Posting on the live site: <strong>${postingOn(env) ? 'ON' : 'OFF'}</strong> (a deploy variable, not a switch here).</p>
+<h2>Background requests (${reqs.length} open)</h2>
+${reqs.length ? `<ul class="small">${reqs.map((r) => `<li>${h(centralDateTime(r.created_at))} · <em>${h(r.text)}</em>${r.email ? ` · <a href="mailto:${h(r.email)}?subject=Your%20background%20request">${h(r.email)}</a>` : ''}</li>`).join('')}</ul>` : '<p class="small">None open.</p>'}
+<p class="small">Entries: ${counts.map((c) => `${h(c.status)} ${c.n}`).join(' · ') || 'none'}. Posting on the live site: <strong>${postingOn(env) ? 'ON' : 'OFF'}</strong> (a deploy variable, not a switch here).</p>
 <script>
 async function decide(id, status){ const r = await fetch('/api/admin/decide',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status})}); if((await r.json()).ok) location.reload(); }
 async function saveSettings(ev){ ev.preventDefault(); const f=ev.target; const b={}; for(const el of f.elements){ if(!el.name) continue; b[el.name]= el.type==='checkbox'? String(el.checked) : el.value; } const r=await fetch('/api/admin/settings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}); document.getElementById('saved').textContent=(await r.json()).ok?'Saved.':'Failed.'; return false; }

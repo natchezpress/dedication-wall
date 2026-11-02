@@ -103,7 +103,7 @@ ${entries.length ? `<div class="grid">${entries.map(cardHtml).join('')}</div>` :
 
 // owner: null for visitors; for the dog's person {key, left, max, sent, skipped, msg, pending}.
 export function dogPage({ e, site, hearted = false, owner = null }) {
-  const modeText = e.mode === 'in_memory' ? 'In memory of' : 'For';
+  const modeText = e.mode === 'in_memory' ? 'In memory of' : 'To';
   const title = `${modeText} ${e.dog_name} · Every Dog Deserves a Dedication`;
   const description = e.line;
   const image = `${site}/p/${e.id}/card.jpg`;
