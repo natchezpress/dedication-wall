@@ -58,6 +58,13 @@
       <label class="field"><span>Your dog’s name</span><input type="text" id="name" maxlength="40" autocomplete="off" placeholder="Biscuit" /></label>
       <label class="field"><span>One line <small id="count">0 / 120</small></span><textarea id="line" maxlength="120" rows="3" placeholder="who waits at the door every single day."></textarea></label>
       <button type="button" class="button quiet" id="help">Need help finding the words?</button>
+      <div class="help-box" id="help-box" hidden>
+        <label class="field"><span>Tell me about your dog <small id="about-count">0 / 240</small></span><textarea id="about" maxlength="240" rows="2" placeholder="Breed, age, a habit, the thing only you would know."></textarea></label>
+        <div class="help-row">
+          <button type="button" class="button" id="suggest">Suggest five lines</button>
+          <span class="hint" id="help-status">Or pick one below and make it yours.</span>
+        </div>
+      </div>
       <ul class="suggestions" id="suggestions" hidden></ul>
     </section>
 

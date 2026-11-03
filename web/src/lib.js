@@ -155,3 +155,49 @@ export async function screen(env, { dog_name, line, cardBytes }) {
     return { verdict: 'review', reasons: [`screening error: ${String(e).slice(0, 120)}`] };
   }
 }
+
+// ---------- word help (Anthropic) ----------
+// Five dedication lines from a few words about the dog. Returns { ok, lines } or { ok: false, error }.
+// Nothing the visitor typed is stored; the caller counts uses for the rate limit.
+const WORD_SYSTEM = [
+  'You write one-line dedications to a dog for a public wall, in the voice of a plainspoken novelist who loved his dog.',
+  'Each line completes the phrase "To {name}," or "In memory of {name}," and starts with "who" (or "whose").',
+  'Living dog: present tense. In memory: past tense, tender, not maudlin.',
+  'Use the specific details given; invent nothing about the dog. Never include a person’s name.',
+  'Plain words. Warm, exact, a little funny where the details allow. No clichés ("rainbow bridge", "furry friend", "fur baby"), no emojis, no hashtags, no exclamation marks, no quotation marks.',
+  'Each line under 100 characters, ending with a period. Five lines, each different in angle.',
+  'Answer with JSON only: {"lines": ["who ...", "who ...", "who ...", "who ...", "who ..."]}.',
+].join(' ');
+
+export async function suggestLines(env, { mode, name, about }) {
+  if (!env.ANTHROPIC_API_KEY) return { ok: false, error: 'no key' };
+  const memory = mode === 'in_memory' || mode === 'inMemory';
+  const body = {
+    model: env.WORDS_MODEL || env.SCREEN_MODEL || 'claude-haiku-5-5',
+    max_tokens: 400,
+    system: WORD_SYSTEM,
+    messages: [{ role: 'user', content: `Kind: ${memory ? 'In memory of' : 'To'} (${memory ? 'the dog has died' : 'the dog is living'})\nDog’s name: ${name || 'my dog'}\nAbout the dog: ${about}` }],
+  };
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: `api ${r.status}` };
+    const text = data?.content?.[0]?.text || '';
+    const m = /\{[\s\S]*\}/.exec(text);
+    let v = null;
+    try { v = m ? JSON.parse(m[0]) : null; } catch { v = null; }
+    const lines = Array.isArray(v?.lines) ? v.lines : [];
+    const clean = [...new Set(lines
+      .filter((s) => typeof s === 'string')
+      .map((s) => s.replace(/[“”"]/g, '').replace(/\s+/g, ' ').trim())
+      .filter((s) => s.length >= 8 && s.length <= 120))].slice(0, 5);
+    if (!clean.length) return { ok: false, error: 'no lines' };
+    return { ok: true, lines: clean };
+  } catch (e) {
+    return { ok: false, error: String(e).slice(0, 120) };
+  }
+}

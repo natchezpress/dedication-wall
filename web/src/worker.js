@@ -3,7 +3,7 @@
 // /privacy, /terms and /admin is answered here.
 import {
   now, centralDay, centralDateTime, shortId, tokenHex, sha256, makeSession, readSession, sessionCookie,
-  json, html, bad, escapeHtml as h, validEmail, visitorHash, sendMail, screen,
+  json, html, bad, escapeHtml as h, validEmail, visitorHash, sendMail, screen, suggestLines,
 } from './lib.js';
 import { wallPage, dogPage, simplePage, notFoundPage } from './pages.js';
 
@@ -31,6 +31,7 @@ export default {
       if (p === '/api/config') return config(env, request);
       if (p === '/api/request' && request.method === 'POST') return requestBackground(env, request);
       if (p === '/api/heart' && request.method === 'POST') return heart(env, request);
+      if (p === '/api/suggest' && request.method === 'POST') return suggest(env, request);
       if (p === '/api/auth/link' && request.method === 'POST') return authLink(env, request, url);
       if (p === '/api/auth/verify' && request.method === 'GET') return authVerify(env, request, url);
       if (p === '/api/auth/logout') return new Response(null, { status: 302, headers: { location: '/', 'set-cookie': 'dw_session=; Path=/; Max-Age=0' } });
@@ -424,6 +425,30 @@ async function heart(env, request) {
     return json({ ok: true, hearts: n, counted: !!r.meta.changes });
   }
   return Response.redirect(`${site(env)}/d/${id}`, 303);
+}
+
+// ---------------------------------------------------------------- word help
+// JSON { mode, name, about } → { ok, lines: [...] }. Nothing typed is stored. Two caps keep the bill
+// bounded: per visitor per Central day, and for everyone per day.
+const SUGGEST_PER_VISITOR = 12;
+const SUGGEST_PER_DAY = 600;
+async function suggest(env, request) {
+  if (!env.ANTHROPIC_API_KEY) return bad('word help is not on', 503);
+  const body = await request.json().catch(() => ({}));
+  const mode = body.mode === 'inMemory' || body.mode === 'in_memory' ? 'in_memory' : 'for';
+  const name = String(body.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  const about = String(body.about || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+  if (about.length < 3) return bad('say a little about your dog');
+  const vh = await visitorHash(request, secret(env));
+  const day = centralDay();
+  const mine = await env.DB.prepare('SELECT n FROM suggest_uses WHERE visitor = ? AND day = ?').bind(vh, day).first();
+  if ((mine?.n || 0) >= SUGGEST_PER_VISITOR) return bad('that’s plenty for today; try a line of your own', 429);
+  const all = await env.DB.prepare('SELECT COALESCE(SUM(n), 0) AS n FROM suggest_uses WHERE day = ?').bind(day).first();
+  if ((all?.n || 0) >= SUGGEST_PER_DAY) return bad('word help is resting for today', 429);
+  await env.DB.prepare('INSERT INTO suggest_uses (visitor, day, n) VALUES (?,?,1) ON CONFLICT(visitor, day) DO UPDATE SET n = n + 1').bind(vh, day).run();
+  const r = await suggestLines(env, { mode, name, about });
+  if (!r.ok) { console.error('suggest', r.error); return bad('no lines just now', 503); }
+  return json({ ok: true, lines: r.lines });
 }
 
 async function invite(env, request, code) {
