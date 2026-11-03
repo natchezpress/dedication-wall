@@ -119,9 +119,20 @@ export async function sendMail(env, { to, subject, text, html: htmlBody, kind, e
 // ---------- screening (Anthropic) ----------
 // Returns { verdict: 'live' | 'rejected' | 'review', reasons: [...] }.
 // With no ANTHROPIC_API_KEY the entry waits for Brock in the admin queue ('review').
+// Base64 in chunks: spreading a whole card (500 KB+) into String.fromCharCode overflows the call stack.
+export function base64(bytes) {
+  const u8 = new Uint8Array(bytes);
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
 export async function screen(env, { dog_name, line, cardBytes }) {
   if (!env.ANTHROPIC_API_KEY) return { verdict: 'review', reasons: ['no screening key; awaiting admin'] };
-  const b64 = btoa(String.fromCharCode(...new Uint8Array(cardBytes)));
+  if (!cardBytes || !cardBytes.byteLength) return { verdict: 'review', reasons: ['card image missing'] };
+  let b64;
+  try { b64 = base64(cardBytes); }
+  catch (e) { return { verdict: 'review', reasons: [`encode error: ${String(e).slice(0, 120)}`] }; }
   const system = [
     'You screen posts for a public, family-friendly wall of dog dedications.',
     'Answer with JSON only: {"ok": true|false, "dog": true|false, "person_face": true|false, "reasons": ["..."]}.',
@@ -143,10 +154,12 @@ export async function screen(env, { dog_name, line, cardBytes }) {
       headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const data = await r.json();
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return { verdict: 'review', reasons: [`screening api ${r.status}: ${String(data?.error?.message || '').slice(0, 120)}`] };
     const text = data?.content?.[0]?.text || '';
     const m = /\{[\s\S]*\}/.exec(text);
-    const v = m ? JSON.parse(m[0]) : null;
+    let v = null;
+    try { v = m ? JSON.parse(m[0]) : null; } catch { v = null; }
     if (!v) return { verdict: 'review', reasons: ['unparseable verdict'] };
     if (!v.ok) return { verdict: 'rejected', reasons: v.reasons || ['content'] };
     if (v.person_face) return { verdict: 'review', reasons: ['a person’s face is visible; permission check'] };
