@@ -32,6 +32,7 @@ export default {
       if (p === '/api/request' && request.method === 'POST') return requestBackground(env, request);
       if (p === '/api/heart' && request.method === 'POST') return heart(env, request);
       if (p === '/api/suggest' && request.method === 'POST') return suggest(env, request);
+      if (p === '/api/cutout' && request.method === 'POST') return cutout(env, request, ctx);
       if (p === '/api/auth/link' && request.method === 'POST') return authLink(env, request, url);
       if (p === '/api/auth/verify' && request.method === 'GET') return authVerify(env, request, url);
       if (p === '/api/auth/logout') return new Response(null, { status: 302, headers: { location: '/', 'set-cookie': 'dw_session=; Path=/; Max-Age=0' } });
@@ -389,6 +390,13 @@ async function dog(env, request, id) {
 }
 
 async function photo(env, request, rest) {
+  // A photo parked for the cutout: served once to Cloudflare's image pipeline, never cached.
+  const tmp = /^tmp\/([a-f0-9]{32})\.jpg$/.exec(rest);
+  if (tmp) {
+    const obj = await env.PHOTOS.get(`tmp/cut/${tmp[1]}.jpg`);
+    if (!obj) return new Response('not found', { status: 404 });
+    return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata?.contentType || 'image/jpeg', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' } });
+  }
   const m = /^([a-z0-9]+)\/(story|feed|card)\.jpg$/.exec(rest);
   if (!m) return new Response('not found', { status: 404 });
   const e = await env.DB.prepare('SELECT status, owner_email, story_key, feed_key, card_key FROM entries WHERE id = ?').bind(m[1]).first();
@@ -449,6 +457,52 @@ async function suggest(env, request) {
   const r = await suggestLines(env, { mode, name, about });
   if (!r.ok) { console.error('suggest', r.error); return bad('no lines just now', 503); }
   return json({ ok: true, lines: r.lines });
+}
+
+// ---------------------------------------------------------------- photo cutout
+// multipart { photo } (JPEG/PNG, ≤ 6 MB; the maker downsizes first) → PNG with a transparent background.
+// The photo is parked in R2 for the seconds Cloudflare Images needs to fetch it, then deleted. Nothing is
+// kept; the table only counts uses. Needs Image Transformations enabled on the zone.
+const CUTOUT_PER_VISITOR = 8;
+const CUTOUT_PER_DAY = 300;
+const MAX_CUTOUT_IN = 6 * 1024 * 1024;
+async function cutout(env, request, ctx) {
+  const form = await request.formData().catch(() => null);
+  const f = form && form.get('photo');
+  if (!(f instanceof File)) return bad('expected a photo');
+  if (f.size > MAX_CUTOUT_IN) return bad('photo is too large', 413);
+  if (!/^image\/(jpeg|png|webp)$/.test(f.type)) return bad('photo must be a JPEG, PNG or WebP');
+  const vh = await visitorHash(request, secret(env));
+  const day = centralDay();
+  const mine = await env.DB.prepare('SELECT n FROM cutout_uses WHERE visitor = ? AND day = ?').bind(vh, day).first();
+  if ((mine?.n || 0) >= CUTOUT_PER_VISITOR) return bad('that’s plenty of cutouts for today', 429);
+  const all = await env.DB.prepare('SELECT COALESCE(SUM(n), 0) AS n FROM cutout_uses WHERE day = ?').bind(day).first();
+  if ((all?.n || 0) >= CUTOUT_PER_DAY) return bad('the cutout is resting for today', 429);
+  await env.DB.prepare('INSERT INTO cutout_uses (visitor, day, n) VALUES (?,?,1) ON CONFLICT(visitor, day) DO UPDATE SET n = n + 1').bind(vh, day).run();
+
+  const id = tokenHex(16);
+  const key = `tmp/cut/${id}.jpg`;
+  await env.PHOTOS.put(key, f.stream(), { httpMetadata: { contentType: f.type } });
+  const cleanup = () => env.PHOTOS.delete(key).catch(() => {});
+  try {
+    const r = await fetch(`${site(env)}/p/tmp/${id}.jpg`, {
+      cf: { image: { segment: 'foreground', format: 'png', width: 1600, height: 1600, fit: 'scale-down', metadata: 'none' } },
+    });
+    const ct = r.headers.get('content-type') || '';
+    const resized = r.headers.get('cf-resized') || '';
+    if (!r.ok || !ct.startsWith('image/png')) {
+      console.error('cutout', r.status, ct, resized);
+      ctx.waitUntil(cleanup());
+      return bad('cutout is not available right now', 503);
+    }
+    const png = await r.arrayBuffer();
+    ctx.waitUntil(cleanup());
+    return new Response(png, { headers: { 'content-type': 'image/png', 'cache-control': 'no-store' } });
+  } catch (e) {
+    console.error('cutout', String(e).slice(0, 200));
+    ctx.waitUntil(cleanup());
+    return bad('cutout is not available right now', 503);
+  }
 }
 
 async function invite(env, request, code) {
@@ -577,6 +631,12 @@ async function saveSettings(ev){ ev.preventDefault(); const f=ev.target; const b
 // ---------------------------------------------------------------- daily cron
 async function daily(env) {
   const t = now();
+  // Sweep any parked cutout photos a failed request left behind (normally deleted within seconds).
+  try {
+    const list = await env.PHOTOS.list({ prefix: 'tmp/cut/' });
+    const stale = list.objects.filter((o) => (t - Math.floor(new Date(o.uploaded).getTime() / 1000)) > 3600).map((o) => o.key);
+    if (stale.length) await env.PHOTOS.delete(stale);
+  } catch (err) { console.error('tmp sweep', err); }
   const since = t - 7 * 86400;
   const q = async (sql, ...b) => (await env.DB.prepare(sql).bind(...b).first());
   const newLive = (await q('SELECT COUNT(*) AS n FROM entries WHERE status = \'live\' AND is_test = 0 AND live_at > ?', since)).n;
