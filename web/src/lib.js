@@ -156,11 +156,12 @@ export async function screen(env, { dog_name, line, cardBytes }) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) return { verdict: 'review', reasons: [`screening api ${r.status}: ${String(data?.error?.message || '').slice(0, 120)}`] };
-    const text = data?.content?.[0]?.text || '';
-    const m = /\{[\s\S]*\}/.exec(text);
+    // Every text block, joined: a response may lead with a non-text block.
+    const text = (Array.isArray(data?.content) ? data.content : []).filter((c) => c?.type === 'text').map((c) => c.text || '').join('\n');
+    const m = /\{[\s\S]*?\}/.exec(text);
     let v = null;
     try { v = m ? JSON.parse(m[0]) : null; } catch { v = null; }
-    if (!v) return { verdict: 'review', reasons: ['unparseable verdict'] };
+    if (!v) { console.error('screen raw', data?.stop_reason, JSON.stringify((data?.content || []).map((c) => c?.type)), JSON.stringify(text).slice(0, 300)); return { verdict: 'review', reasons: ['unparseable verdict'] }; }
     if (!v.ok) return { verdict: 'rejected', reasons: v.reasons || ['content'] };
     if (v.person_face) return { verdict: 'review', reasons: ['a person’s face is visible; permission check'] };
     return { verdict: 'live', reasons: v.reasons || [] };
@@ -199,16 +200,18 @@ export async function suggestLines(env, { mode, name, about }) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) return { ok: false, error: `api ${r.status}` };
-    const text = data?.content?.[0]?.text || '';
-    const m = /\{[\s\S]*\}/.exec(text);
-    let v = null;
-    try { v = m ? JSON.parse(m[0]) : null; } catch { v = null; }
-    const lines = Array.isArray(v?.lines) ? v.lines : [];
+    // All text blocks, joined; then JSON if it parses, else any quoted strings, else "who …" lines.
+    const text = (Array.isArray(data?.content) ? data.content : []).filter((c) => c?.type === 'text').map((c) => c.text || '').join('\n');
+    let lines = [];
+    const m = /\{[\s\S]*?\}/.exec(text);
+    if (m) { try { const v = JSON.parse(m[0]); if (Array.isArray(v?.lines)) lines = v.lines; } catch { /* fall through */ } }
+    if (!lines.length) lines = [...text.matchAll(/"([^"\n]{8,140})"/g)].map((x) => x[1]);
+    if (!lines.length) lines = text.split(/\n+/).map((s) => s.replace(/^[\s\-*\d.)]+/, '').trim()).filter((s) => /^(who|whose)\b/i.test(s));
     const clean = [...new Set(lines
       .filter((s) => typeof s === 'string')
-      .map((s) => s.replace(/[“”"]/g, '').replace(/\s+/g, ' ').trim())
+      .map((s) => s.replace(/[“”"]/g, '').replace(/\\n/g, ' ').replace(/\s+/g, ' ').trim())
       .filter((s) => s.length >= 8 && s.length <= 120))].slice(0, 5);
-    if (!clean.length) return { ok: false, error: 'no lines' };
+    if (!clean.length) { console.error('suggest raw', data?.stop_reason, JSON.stringify(text).slice(0, 400)); return { ok: false, error: 'no lines' }; }
     return { ok: true, lines: clean };
   } catch (e) {
     return { ok: false, error: String(e).slice(0, 120) };
