@@ -127,6 +127,24 @@ export function base64(bytes) {
   return btoa(s);
 }
 
+// One call to the Messages API. Haiku 5.5 thinks by default and the thinking counts against max_tokens,
+// so a small budget came back as stop_reason "max_tokens" with no text at all (11/3). Thinking is turned
+// off for these short, structured jobs; if a model rejects that parameter, the call is retried without it.
+export async function anthropic(env, body) {
+  const send = (b) => fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify(b),
+  });
+  let r = await send({ ...body, thinking: { type: 'disabled' } });
+  let data = await r.json().catch(() => ({}));
+  if (r.status === 400 && /thinking/i.test(String(data?.error?.message || ''))) {
+    r = await send(body);
+    data = await r.json().catch(() => ({}));
+  }
+  return { r, data };
+}
+
 export async function screen(env, { dog_name, line, cardBytes }) {
   if (!env.ANTHROPIC_API_KEY) return { verdict: 'review', reasons: ['no screening key; awaiting admin'] };
   if (!cardBytes || !cardBytes.byteLength) return { verdict: 'review', reasons: ['card image missing'] };
@@ -141,7 +159,7 @@ export async function screen(env, { dog_name, line, cardBytes }) {
   ].join(' ');
   const body = {
     model: env.SCREEN_MODEL || 'claude-haiku-5-5',
-    max_tokens: 200,
+    max_tokens: 300,
     system,
     messages: [{ role: 'user', content: [
       { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
@@ -149,12 +167,7 @@ export async function screen(env, { dog_name, line, cardBytes }) {
     ] }],
   };
   try {
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await r.json().catch(() => ({}));
+    const { r, data } = await anthropic(env, body);
     if (!r.ok) return { verdict: 'review', reasons: [`screening api ${r.status}: ${String(data?.error?.message || '').slice(0, 120)}`] };
     // Every text block, joined: a response may lead with a non-text block.
     const text = (Array.isArray(data?.content) ? data.content : []).filter((c) => c?.type === 'text').map((c) => c.text || '').join('\n');
@@ -188,18 +201,13 @@ export async function suggestLines(env, { mode, name, about }) {
   const memory = mode === 'in_memory' || mode === 'inMemory';
   const body = {
     model: env.WORDS_MODEL || env.SCREEN_MODEL || 'claude-haiku-5-5',
-    max_tokens: 400,
+    max_tokens: 600,
     system: WORD_SYSTEM,
     messages: [{ role: 'user', content: `Kind: ${memory ? 'In memory of' : 'To'} (${memory ? 'the dog has died' : 'the dog is living'})\nDog’s name: ${name || 'my dog'}\nAbout the dog: ${about}` }],
   };
   try {
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) return { ok: false, error: `api ${r.status}` };
+    const { r, data } = await anthropic(env, body);
+    if (!r.ok) { console.error('suggest api', r.status, String(data?.error?.message || '').slice(0, 200)); return { ok: false, error: `api ${r.status}` }; }
     // All text blocks, joined; then JSON if it parses, else any quoted strings, else "who …" lines.
     const text = (Array.isArray(data?.content) ? data.content : []).filter((c) => c?.type === 'text').map((c) => c.text || '').join('\n');
     let lines = [];
