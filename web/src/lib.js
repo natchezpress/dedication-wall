@@ -153,8 +153,12 @@ export async function screen(env, { dog_name, line, cardBytes }) {
   catch (e) { return { verdict: 'review', reasons: [`encode error: ${String(e).slice(0, 120)}`] }; }
   const system = [
     'You screen posts for a public, family-friendly wall of dog dedications.',
+    'The image is a finished card made by our own maker. Every card carries our template: the label "To" or "In memory of", the dog’s name,',
+    'the dedication line, the footer "Every dog deserves a dedication" and our own address "dedication.jetsonsjourney.com", on one of our backgrounds.',
+    'Those template parts are ours and are never a reason to refuse. Judge only the reader’s photo and the reader’s words (the dog’s name and the line).',
     'Answer with JSON only: {"ok": true|false, "dog": true|false, "person_face": true|false, "reasons": ["..."]}.',
-    'ok is false for nudity, violence, hate, harassment, threats, spam, links, advertising, or text that is not a dedication to a dog.',
+    'ok is false for nudity, sexual content, violence, gore, hate, harassment, threats, spam, a reader’s own link or advertising, or words that are not a dedication to a dog.',
+    'A photo without a dog (a toy, a drawing, a different animal) is still ok if the words are a dedication; set dog to false.',
     'person_face is true if a human face is clearly visible. Judge content only; never try to identify anyone.',
   ].join(' ');
   const body = {
@@ -175,7 +179,14 @@ export async function screen(env, { dog_name, line, cardBytes }) {
     let v = null;
     try { v = m ? JSON.parse(m[0]) : null; } catch { v = null; }
     if (!v) { console.error('screen raw', data?.stop_reason, JSON.stringify((data?.content || []).map((c) => c?.type)), JSON.stringify(text).slice(0, 300)); return { verdict: 'review', reasons: ['unparseable verdict'] }; }
-    if (!v.ok) return { verdict: 'rejected', reasons: v.reasons || ['content'] };
+    // A refusal with a severe reason is rejected outright (photo deleted, owner told). Anything milder waits
+    // for Brock in the queue, so a wrong call never deletes a reader's photo.
+    if (!v.ok) {
+      const reasons = Array.isArray(v.reasons) && v.reasons.length ? v.reasons.map(String) : ['content'];
+      const severe = /nudit|sexual|porn|violen|gore|blood|hate|slur|harass|threat/i.test(reasons.join(' '));
+      console.error('screen refused', severe ? 'rejected' : 'review', JSON.stringify(reasons).slice(0, 300));
+      return { verdict: severe ? 'rejected' : 'review', reasons: [`model: ${reasons.join('; ')}`.slice(0, 300)] };
+    }
     if (v.person_face) return { verdict: 'review', reasons: ['a person’s face is visible; permission check'] };
     return { verdict: 'live', reasons: v.reasons || [] };
   } catch (e) {
