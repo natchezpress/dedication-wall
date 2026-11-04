@@ -10,6 +10,7 @@ const state = {
   bg: null,          // manifest entry
   bgImg: null,
   photo: null,       // {img, view:{scale,dx,dy}, file}
+  cutout: null,      // {img, file, status:'working'|'ok'|'failed'} — the dog with no background, for Jetson's Spots
   mode: 'for',
   name: '',
   line: '',
@@ -35,11 +36,18 @@ function loadImage(src) {
   return p;
 }
 
+// For a Spots background, the cutout (if on and ready) stands in for the photo; the drag/zoom view is shared.
+function photoForRender() {
+  if (state.bg?.sticker && cutoutOn() && state.cutout?.status === 'ok' && state.cutout.file === state.photo?.file) {
+    return { img: state.cutout.img, view: state.photo.view, file: state.photo.file };
+  }
+  return state.photo;
+}
 let raf = 0;
 function draw() {
   cancelAnimationFrame(raf);
   raf = requestAnimationFrame(() => {
-    render(master, { mode: state.mode, name: state.name, line: state.line }, state.bg, state.bgImg, state.photo);
+    render(master, { mode: state.mode, name: state.name, line: state.line }, state.bg, state.bgImg, photoForRender());
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const cssW = preview.clientWidth || 280, cssH = cssW * 16 / 9;
     if (preview.width !== Math.round(cssW * dpr)) { preview.width = Math.round(cssW * dpr); preview.height = Math.round(cssH * dpr); }
@@ -112,9 +120,76 @@ async function selectBackground(e) {
   renderGrid();
   track('background_picked', { id: e.id, group: e.group });
   draw();
+  if (e.sticker) requestCutout();
   try { state.bgImg = await loadImage(`/backgrounds/${e.file}`); } catch { state.bgImg = null; }
   if (state.bg === e) draw();
 }
+
+// ---------- cutout (Jetson's Spots) ----------
+// The photo is downsized here, sent once to /api/cutout, and the PNG that comes back stands in for the
+// photo in the sticker layout. A transparent PNG the reader brought is used as is.
+const cutoutOn = () => !!$('#cutout-on')?.checked;
+const CUTOUT_HINT = {
+  idle: 'Pick a photo and the dog is cut out automatically. If it comes out wrong, untick the box and use a cut-out of your own: on an iPhone, press and hold the dog in Photos, then Copy or Share it as a sticker.',
+  working: 'Cutting your dog out of the photo…',
+  ok: 'Done. Drag your dog to where he sat; untick the box to use the photo as it was.',
+  own: 'That photo already has no background, so it is used as is.',
+  failed: 'Couldn’t cut this one out just now. Use a cut-out of your own: on an iPhone, press and hold the dog in Photos, then Copy or Share it as a sticker.',
+};
+const cutoutStatus = (k) => { const el = $('#cutout-status'); if (el) el.textContent = CUTOUT_HINT[k] || k; };
+
+async function downsized(file, max = 1600) {
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const s = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  return new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9));
+}
+
+// A PNG whose corners are transparent is already a cut-out.
+function hasTransparentCorners(img) {
+  try {
+    const c = document.createElement('canvas'); c.width = 8; c.height = 8;
+    const x = c.getContext('2d');
+    const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+    x.drawImage(img, 0, 0, 4, 4, 0, 0, 4, 4); x.drawImage(img, w - 4, 0, 4, 4, 4, 0, 4, 4);
+    x.drawImage(img, 0, h - 4, 4, 4, 0, 4, 4, 4); x.drawImage(img, w - 4, h - 4, 4, 4, 4, 4, 4, 4);
+    const d = x.getImageData(0, 0, 8, 8).data;
+    let clear = 0; for (let i = 3; i < d.length; i += 4) if (d[i] < 16) clear++;
+    return clear > 40;
+  } catch { return false; }
+}
+
+async function requestCutout() {
+  if (!state.photo?.file || !cutoutOn()) return;
+  const file = state.photo.file;
+  if (state.cutout && state.cutout.file === file) { cutoutStatus(state.cutout.status === 'ok' ? 'ok' : state.cutout.status === 'own' ? 'own' : state.cutout.status); return; }
+  if (file.type === 'image/png' && hasTransparentCorners(state.photo.img)) { state.cutout = { file, status: 'own' }; cutoutStatus('own'); return; }
+  state.cutout = { file, status: 'working' };
+  cutoutStatus('working');
+  try {
+    const small = await downsized(file);
+    const fd = new FormData(); fd.set('photo', small, 'photo.jpg');
+    const r = await fetch('/api/cutout', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(String(r.status));
+    const blob = await r.blob();
+    if (!blob.type.startsWith('image/png')) throw new Error('not png');
+    const img = await loadImage(URL.createObjectURL(blob));
+    if (state.photo?.file !== file) return; // the reader changed photos meanwhile
+    state.cutout = { img, file, status: 'ok' };
+    cutoutStatus('ok');
+    track('cutout_ok');
+  } catch (e) {
+    if (state.photo?.file !== file) return;
+    state.cutout = { file, status: 'failed' };
+    cutoutStatus('failed');
+    track('cutout_failed', { why: e.message });
+  }
+  draw();
+}
+$('#cutout-on').addEventListener('change', () => { if (cutoutOn()) requestCutout(); else cutoutStatus('idle'); draw(); });
 
 function applyModeToBackground() {
   if (state.mode === 'inMemory' && state.bg && !state.bg.inMemory) {
@@ -131,11 +206,13 @@ $('#photo').addEventListener('change', async (ev) => {
   try {
     const img = await loadImage(url);
     state.photo = { img, file, view: { scale: 1, dx: 0, dy: 0 } };
+    state.cutout = null;
     $('#zoom').value = '1';
     $('#photo-label').textContent = 'Change photo';
     idbSet('photo', file); saveDraftNow();
     track('photo_added');
     draw();
+    if (state.bg?.sticker) requestCutout();
     document.querySelector('#step-words')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch { /* unreadable image */ }
 });
@@ -244,7 +321,7 @@ function fileName(which) {
 }
 async function makeFile(which) {
   await ensureFonts();
-  render(master, { mode: state.mode, name: state.name, line: state.line }, state.bg, state.bgImg, state.photo);
+  render(master, { mode: state.mode, name: state.name, line: state.line }, state.bg, state.bgImg, photoForRender());
   const blob = await cut(master, which);
   return new File([blob], fileName(which), { type: 'image/jpeg' });
 }
@@ -321,6 +398,7 @@ async function restoreDraft() {
     } catch { /* unreadable */ }
   }
   draw();
+  if (state.bg?.sticker && state.photo) requestCutout();
 }
 function clearDraft() { try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } idbDel('photo'); }
 

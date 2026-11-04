@@ -45,7 +45,10 @@
         <input type="file" id="photo" accept="image/*" />
         <span class="button" id="photo-label">Choose a photo</span>
       </label>
-      <p class="hint" id="sticker-hint" hidden>For Jetson’s Spots, use a cut-out of your dog with no background. On an iPhone, press and hold the dog in Photos, then Copy or Share it as a sticker.</p>
+      <div id="sticker-hint" hidden>
+        <label class="check small"><input type="checkbox" id="cutout-on" checked /> <span>Cut my dog out of the photo for me (Jetson’s Spots)</span></label>
+        <p class="hint" id="cutout-status">Pick a photo and the dog is cut out automatically. If it comes out wrong, untick the box and use a cut-out of your own: on an iPhone, press and hold the dog in Photos, then Copy or Share it as a sticker.</p>
+      </div>
       <label class="range"><span>Zoom</span><input type="range" id="zoom" min="1" max="3" step="0.01" value="1" /></label>
     </section>
 
