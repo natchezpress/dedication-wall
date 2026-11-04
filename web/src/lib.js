@@ -156,11 +156,12 @@ export async function screen(env, { dog_name, line, cardBytes }) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) return { verdict: 'review', reasons: [`screening api ${r.status}: ${String(data?.error?.message || '').slice(0, 120)}`] };
-    const text = data?.content?.[0]?.text || '';
-    const m = /\{[\s\S]*\}/.exec(text);
+    // Every text block, joined: a response may lead with a non-text block.
+    const text = (Array.isArray(data?.content) ? data.content : []).filter((c) => c?.type === 'text').map((c) => c.text || '').join('\n');
+    const m = /\{[\s\S]*?\}/.exec(text);
     let v = null;
     try { v = m ? JSON.parse(m[0]) : null; } catch { v = null; }
-    if (!v) return { verdict: 'review', reasons: ['unparseable verdict'] };
+    if (!v) { console.error('screen raw', data?.stop_reason, JSON.stringify((data?.content || []).map((c) => c?.type)), JSON.stringify(text).slice(0, 300)); return { verdict: 'review', reasons: ['unparseable verdict'] }; }
     if (!v.ok) return { verdict: 'rejected', reasons: v.reasons || ['content'] };
     if (v.person_face) return { verdict: 'review', reasons: ['a person’s face is visible; permission check'] };
     return { verdict: 'live', reasons: v.reasons || [] };
