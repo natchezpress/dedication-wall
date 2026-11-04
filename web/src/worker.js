@@ -38,6 +38,7 @@ export default {
       if (p === '/api/auth/logout') return new Response(null, { status: 302, headers: { location: '/', 'set-cookie': 'dw_session=; Path=/; Max-Age=0' } });
       if (p === '/api/post' && request.method === 'POST') return post(env, request, ctx);
       if (p === '/api/mine' && request.method === 'GET') return mine(env, request);
+      if (p === '/api/remove' && request.method === 'GET') return removeConfirm(env, request);
       if (p === '/api/remove' && request.method === 'POST') return remove(env, request);
       if (p === '/api/invite' && request.method === 'POST') return sendInvites(env, request);
       if (p.startsWith('/api/admin')) return admin(env, request, url);
@@ -329,6 +330,20 @@ async function mine(env, request) {
 }
 
 // Owner removal: the signed link from the "live" email (GET) or a signed-in POST.
+// The "take it down" link in the owner's email is a GET: it shows a confirmation with one button, and the
+// button posts. Mail scanners and link previews follow GETs, so a GET must never remove anything by itself.
+async function removeConfirm(env, request) {
+  const url = new URL(request.url);
+  const id = (url.searchParams.get('id') || '').replace(/[^a-z0-9]/g, '');
+  const key = url.searchParams.get('key') || '';
+  if (!id || !key || key !== (await sha256(`${secret(env)}|remove|${id}`))) return html(notFoundPage(), 404);
+  const e = await env.DB.prepare('SELECT dog_name, status FROM entries WHERE id = ?').bind(id).first();
+  if (!e) return html(notFoundPage(), 404);
+  if (e.status === 'removed') return html(simplePage({ title: 'Already down', bodyHtml: '<p>This dedication is already off the wall, and its photos are deleted. <a href="/">Make another any time.</a></p>', noindex: true }));
+  const action = `/api/remove?id=${id}&key=${encodeURIComponent(key)}`;
+  return html(simplePage({ title: `Take ${h(e.dog_name)}’s dedication down?`, bodyHtml: `<p>This removes ${h(e.dog_name)}’s page from the wall and deletes its photos right away. It can’t be undone, but you can always make a new one.</p><form method="post" action="${action}"><button type="submit" class="btn">Take it down</button></form><p><a href="/d/${id}">Keep it; go back to the page.</a></p>`, noindex: true }));
+}
+
 async function remove(env, request) {
   const url = new URL(request.url);
   const id = url.searchParams.get('id') || (await request.formData().catch(() => null))?.get('id');
