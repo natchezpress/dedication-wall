@@ -194,17 +194,47 @@ $('#line').addEventListener('input', (ev) => {
   $('#count').textContent = `${state.line.length} / 120`;
   draw();
 });
-$('#help').addEventListener('click', () => {
+// Word help: the fixed list shows at once; a few words about the dog ask Claude for five of its own.
+// Nothing typed in the "about" box leaves the browser except to make that one request; it is not stored.
+function showLines(lines) {
   const ul = $('#suggestions');
   ul.innerHTML = '';
-  for (const s of suggest(state.mode, 5)) {
+  for (const s of lines) {
     const li = document.createElement('li');
     const b = document.createElement('button'); b.type = 'button'; b.textContent = s;
-    b.addEventListener('click', () => { $('#line').value = s; state.line = s; $('#count').textContent = `${s.length} / 120`; ul.hidden = true; draw(); });
+    b.addEventListener('click', () => { $('#line').value = s; state.line = s; $('#count').textContent = `${s.length} / 120`; saveDraft(); draw(); });
     li.appendChild(b); ul.appendChild(li);
   }
   ul.hidden = false;
+}
+$('#help').addEventListener('click', () => {
+  const box = $('#help-box');
+  box.hidden = !box.hidden;
+  if (box.hidden) { $('#suggestions').hidden = true; return; }
+  $('#help-status').textContent = 'Or pick one below and make it yours.';
+  showLines(suggest(state.mode, 5));
+  $('#about').focus({ preventScroll: true });
   track('words_help');
+});
+$('#about').addEventListener('input', (ev) => { $('#about-count').textContent = `${ev.target.value.length} / 240`; });
+$('#suggest').addEventListener('click', async () => {
+  const about = $('#about').value.trim();
+  const status = $('#help-status');
+  if (about.length < 3) { status.textContent = 'A few words first: what is your dog like?'; $('#about').focus(); return; }
+  const btn = $('#suggest'); btn.disabled = true;
+  status.textContent = 'Thinking…';
+  const ul = $('#suggestions'); ul.innerHTML = '<li class="thinking">Finding the words…</li>'; ul.hidden = false;
+  try {
+    const r = await fetch('/api/suggest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: state.mode, name: state.name.trim(), about }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok || !j.lines?.length) throw new Error(j.error || String(r.status));
+    showLines(j.lines);
+    status.textContent = 'Tap one to use it, then edit it however you like. Ask again for five more.';
+    track('words_ai');
+  } catch (e) {
+    showLines(suggest(state.mode, 5));
+    status.textContent = /plenty|resting/.test(e.message) ? e.message : 'Couldn’t reach the word help just now; here are a few from the book instead.';
+  } finally { btn.disabled = false; }
 });
 
 // ---------- share and save ----------

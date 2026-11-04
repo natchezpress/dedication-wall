@@ -84,7 +84,12 @@ input[type="text"], input[type="email"], textarea {
   border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink);
 }
 textarea { resize: vertical; }
+.help-box { margin: 12px 0 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper-2, #efe6d6); }
+.help-box .field { margin-bottom: 8px; }
+.help-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.help-row .hint { margin: 0; }
 .suggestions { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; }
+.suggestions li.thinking { color: var(--quiet); font-style: italic; padding: 10px 12px; }
 .suggestions button { width: 100%; text-align: left; font: inherit; font-style: italic; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); cursor: pointer; }
 .tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 10px; -webkit-overflow-scrolling: touch; }
 .tabs button { flex: none; font: inherit; font-size: 15px; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; }
