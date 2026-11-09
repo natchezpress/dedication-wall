@@ -67,6 +67,7 @@ async function settings(env) {
   return {
     termsVersion: s.terms_version || TERMS_VERSION_FALLBACK,
     dogOfTheDay: s.dog_of_the_day || '',
+    notifyLive: (s.notify_live ?? 'true') !== 'false',
   };
 }
 
@@ -207,13 +208,36 @@ async function screenAndPublish(env, id) {
   if (v.verdict === 'live') {
     await env.DB.prepare('UPDATE entries SET status = \'live\', screen_result = ?, screened_at = ?, live_at = ? WHERE id = ?').bind(JSON.stringify(v), t, t, id).run();
     await notifyLive(env, { ...e, live_at: t });
+    await notifyAdminLive(env, e);
   } else if (v.verdict === 'rejected') {
     await env.DB.prepare('UPDATE entries SET screen_result = ?, screened_at = ? WHERE id = ?').bind(JSON.stringify(v), t, id).run();
     await rejectEntry(env, e);
   } else {
     await env.DB.prepare('UPDATE entries SET screen_result = ?, screened_at = ? WHERE id = ?').bind(JSON.stringify(v), t, id).run();
-    // stays pending for the admin queue
+    await notifyAdminQueue(env, e, v); // stays pending for the admin queue; Brock hears at once
   }
+}
+
+// Two notes to Brock (CONTACT_EMAIL). "Needs your look" always; "New dog on the wall" behind the
+// notify_live switch on /admin (default on while the wall is small).
+async function notifyAdminQueue(env, e, v) {
+  if (!env.CONTACT_EMAIL) return;
+  const reasons = Array.isArray(v?.reasons) && v.reasons.length ? v.reasons.join('; ') : 'no reason given';
+  const admin = `${site(env)}/admin`;
+  await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'alert', entry_id: e.id,
+    subject: `Needs your look: ${e.dog_name}`,
+    text: `A dedication is waiting in the queue.\n\n${e.mode === 'in_memory' ? 'In memory of' : 'To'} ${e.dog_name}\n${e.line}\nfrom ${e.owner_email}${e.is_test ? ' (test)' : ''}\n\nScreener: ${reasons}\n\nPublish or reject: ${admin}`,
+    html: `<p>A dedication is waiting in the queue.</p><p><strong>${e.mode === 'in_memory' ? 'In memory of' : 'To'} ${h(e.dog_name)}</strong><br><em>${h(e.line)}</em><br>from ${h(e.owner_email)}${e.is_test ? ' (test)' : ''}</p><p>Screener: ${h(reasons)}</p><p><a href="${admin}">Publish or reject</a></p>` });
+}
+async function notifyAdminLive(env, e) {
+  if (!env.CONTACT_EMAIL) return;
+  const s = await settings(env);
+  if (!s.notifyLive) return;
+  const page = `${site(env)}/d/${e.id}`;
+  await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'alert', entry_id: e.id,
+    subject: `New dog on the wall: ${e.dog_name}`,
+    text: `${e.mode === 'in_memory' ? 'In memory of' : 'To'} ${e.dog_name}\n${e.line}\nfrom ${e.owner_email}${e.is_test ? ' (test)' : ''}\n\n${page}\n\nTurn these off on /admin (Switches) when the wall is busy.`,
+    html: `<p><strong>${e.mode === 'in_memory' ? 'In memory of' : 'To'} ${h(e.dog_name)}</strong><br><em>${h(e.line)}</em><br>from ${h(e.owner_email)}${e.is_test ? ' (test)' : ''}</p><p><a href="${page}">${page}</a></p><p style="color:#6f665d;font-size:13px">Turn these off on /admin (Switches) when the wall is busy.</p>` });
 }
 
 // Declined: the status changes, the photos are deleted at once, the owner hears why in general terms.
@@ -599,7 +623,7 @@ async function admin(env, request, url) {
   if (p === 'settings' && request.method === 'GET') return json({ ok: true, settings: await settings(env) });
   if (p === 'settings' && request.method === 'POST') {
     const b = await request.json().catch(() => ({}));
-    const allowed = ['terms_version', 'dog_of_the_day'];
+    const allowed = ['terms_version', 'dog_of_the_day', 'notify_live'];
     const stmts = [];
     for (const [k, v] of Object.entries(b)) {
       if (!allowed.includes(k)) continue;
@@ -647,6 +671,7 @@ ${queue.length ? queue.map((e) => `<div class="dotd" style="grid-template-column
 <form onsubmit="return saveSettings(event)">
 <p><label>Dog of the day (entry id, blank = automatic) <input name="dog_of_the_day" value="${h(s.dogOfTheDay)}" size="10"/></label></p>
 <p><label>Terms version recorded on new posts <input name="terms_version" value="${h(s.termsVersion)}" size="28"/></label></p>
+<p><label><input type="checkbox" name="notify_live"${s.notifyLive ? ' checked' : ''}/> Email me each time a dog goes live (the “needs your look” note always comes)</label></p>
 <p><button class="btn" type="submit">Save</button> <span class="small" id="saved"></span></p>
 </form>
 <h2>Background requests (${reqs.length} open)</h2>
