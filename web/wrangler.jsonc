@@ -31,7 +31,10 @@
     "MAIL_FROM": "Every Dog Deserves a Dedication <hello@dedication.jetsonsjourney.com>",
     // The sign-up offer in invite emails (decision 6): the Riverspook reader magnet on BookFunnel.
     "MAGNET_URL": "https://dl.bookfunnel.com/w8akj9mgc4",
-    "POSTAL_ADDRESS": "Natchez Press LLC · 2000 Mallory Ln, Suite 290 #1075 · Franklin, TN 37067"
+    "POSTAL_ADDRESS": "Natchez Press LLC · 2000 Mallory Ln, Suite 290 #1075 · Franklin, TN 37067",
+    // MailerLite group "10 · Dedication Wall" (created 2026-11-09). The newsletter box subscribes here once
+    // the MAILERLITE_API_KEY Secret is set; until then it only records the opt-in.
+    "MAILERLITE_GROUP_ID": "203704573000418688"
   },
   "triggers": {
     // Daily at 13:00 UTC (7 a.m. Central in winter, 8 a.m. in summer): the Monday digest.
