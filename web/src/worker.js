@@ -232,7 +232,7 @@ async function deletePhotos(env, e) {
 
 async function notifyLive(env, e) {
   const page = `${site(env)}/d/${e.id}`;
-  const inviteUrl = `${site(env)}/i/${e.invite_code}`;
+  const inviteUrl = `${site(env)}/i/${e.invite_code}?utm_source=share&utm_medium=referral&utm_campaign=ops-57`;
   const inviteForm = `${page}?k=${await inviteKey(env, e.id)}`;
   const removeUrl = `${site(env)}/api/remove?id=${e.id}&key=${await sha256(`${secret(env)}|remove|${e.id}`)}`;
   await sendMail(env, { to: e.owner_email, kind: 'live', entry_id: e.id,
@@ -287,7 +287,8 @@ async function sendInvites(env, request) {
 
 function inviteMail(env, e, unsub) {
   const dog = e.dog_name;
-  const page = `${site(env)}/i/${e.invite_code}`;
+  const page = `${site(env)}/i/${e.invite_code}?utm_source=invite&utm_medium=email&utm_campaign=ops-57`;
+  const maker = `${site(env)}/?utm_source=invite&utm_medium=email&utm_campaign=ops-57`;
   const magnet = env.MAGNET_URL || 'https://www.brockalston.com';
   const addr = env.POSTAL_ADDRESS || 'Natchez Press LLC, Franklin, Tennessee';
   const text = `Someone you know made a dedication for their dog, ${dog}, on the Dedication Wall: the kind a novelist writes to the dog who got them through.
@@ -296,7 +297,7 @@ See ${dog}’s page and leave a heart:
 ${page}
 
 Make one for your own dog. Free, a minute, on your phone:
-${site(env)}/
+${maker}
 
 Dog people who read: get Riverspook, a free novella from the world of Jetson’s Journey, when you join Brock Alston’s letters:
 ${magnet}
@@ -308,7 +309,7 @@ ${addr}`;
   const html = `<div style="font-family:Georgia,serif;font-size:17px;line-height:1.5;color:#2b2622">
 <p>Someone you know made a dedication for their dog, <strong>${h(dog)}</strong>, on the Dedication Wall: the kind a novelist writes to the dog who got them through.</p>
 <p><a href="${page}" style="display:inline-block;background:#1f2a44;color:#fff;text-decoration:none;padding:11px 18px;border-radius:999px">See ${h(dog)}’s page and leave a heart</a></p>
-<p>Make one for your own dog. Free, a minute, on your phone: <a href="${site(env)}/">${h(site(env).replace(/^https?:\/\//, ''))}</a></p>
+<p>Make one for your own dog. Free, a minute, on your phone: <a href="${maker}">${h(site(env).replace(/^https?:\/\//, ''))}</a></p>
 <p>Dog people who read: get <em>Riverspook</em>, a free novella from the world of <em>Jetson’s Journey</em>, when you join Brock Alston’s letters: <a href="${magnet}">${h(magnet)}</a></p>
 <p style="color:#6f665d;font-size:13px">This one-time note was sent at the request of ${h(dog)}’s person. We did not keep your address; we remember only not to write again if you ask: <a href="${unsub}">don’t email me again</a>.<br>${h(addr)}</p>
 </div>`;
@@ -537,7 +538,10 @@ async function invite(env, request, code) {
   const inv = await env.DB.prepare('SELECT entry_id FROM invites WHERE code = ?').bind(code).first();
   if (!inv) return html(notFoundPage(), 404);
   await env.DB.prepare('UPDATE invites SET visits = visits + 1 WHERE code = ?').bind(code).run();
-  return Response.redirect(`${site(env)}/d/${inv.entry_id}?via=invite`, 302);
+  // Keep any UTMs the share or invite link carried, so GA4 sees the source on the dog page.
+  const q = new URL(request.url).searchParams;
+  const utm = [...q.entries()].filter(([k]) => k.startsWith('utm_')).map(([k, v]) => `&${k}=${encodeURIComponent(v)}`).join('');
+  return Response.redirect(`${site(env)}/d/${inv.entry_id}?via=invite${utm}`, 302);
 }
 
 async function requestBackground(env, request) {

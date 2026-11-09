@@ -53,6 +53,8 @@ function layout({ title, description, image, url, body, nav = '', noindex = fals
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${h(title)}</title>
 <meta name="description" content="${h(description)}" />
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-ZQLVEN820R"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-ZQLVEN820R');</script>
 <meta property="og:title" content="${h(title)}" />
 <meta property="og:description" content="${h(description)}" />
 <meta property="og:type" content="website" />
@@ -141,7 +143,10 @@ export function dogPage({ e, site, hearted = false, owner = null }) {
     <p class="small">Posted ${h(centralDateTime(e.live_at || e.created_at))}. Something wrong with this page? <a href="mailto:admin@brockalston.com?subject=Dedication%20${h(e.id)}">Tell us</a>.</p>
   </div>
 </div>`;
-  return layout({ title, description, image, url: `${site}/d/${e.id}`, body, nav: nav(e.mode === 'in_memory' ? '/memory' : '/wall'), noindex: !!owner?.pending });
+  // GA4: the owner just sent invitations (the form redirects back with ?sent=N).
+  const sentN = owner && owner.sent != null ? Number(owner.sent) : 0;
+  const bodyWithEvents = sentN > 0 ? `${body}<script>try{gtag('event','invite_sent',{count:${sentN}})}catch(e){}</script>` : body;
+  return layout({ title, description, image, url: `${site}/d/${e.id}`, body: bodyWithEvents, nav: nav(e.mode === 'in_memory' ? '/memory' : '/wall'), noindex: !!owner?.pending });
 }
 
 export function simplePage({ title, description = title, bodyHtml, site, path, noindex = false }) {
