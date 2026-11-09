@@ -106,7 +106,7 @@ function renderGrid() {
     img.loading = 'lazy'; img.alt = ''; img.src = `/backgrounds/thumbs/${e.id}.webp`;
     const span = document.createElement('span'); span.textContent = e.name.replace(/^Spot: /, '');
     b.append(img, span);
-    b.addEventListener('click', () => selectBackground(e));
+    b.addEventListener('click', () => { selectBackground(e); cueAfterBackground(); });
     grid.appendChild(b);
   }
 }
@@ -123,6 +123,54 @@ async function selectBackground(e) {
   if (e.sticker) requestCutout();
   try { state.bgImg = await loadImage(`/backgrounds/${e.file}`); } catch { state.bgImg = null; }
   if (state.bg === e) draw();
+}
+
+// ---------- next-step glow ----------
+// When a step is done, the next step's main control pulses once (two beats), then stops. Each cue fires
+// once per dedication. The step line is read to screen readers, so the glow is never the only cue.
+const STEP_TOTAL = 5;
+const cued = new Set();
+function nudge(key, el, stepNo, stepName) {
+  if (!el || cued.has(key)) return;
+  cued.add(key);
+  el.classList.remove('glow');
+  void el.offsetWidth; // restart the animation if the class was just removed
+  el.classList.add('glow');
+  const done = () => el.classList.remove('glow');
+  el.addEventListener('animationend', done, { once: true });
+  setTimeout(done, 1600);
+  if (stepNo) { const live = $('#step-live'); if (live) live.textContent = `Step ${stepNo} of ${STEP_TOTAL}: ${stepName}`; }
+}
+// A gentle scroll, only when no keyboard can be up (after the photo, after the background).
+function settle(el) {
+  if (!el || document.activeElement?.matches?.('input, textarea')) return;
+  // The preview is sticky at the top on phones; land the step just under it.
+  const wrap = document.querySelector('.preview-wrap');
+  const sticky = wrap && getComputedStyle(wrap).position === 'sticky' ? wrap.offsetHeight + 8 : 0;
+  el.style.scrollMarginTop = `${sticky}px`;
+  try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch { /* old browser */ }
+}
+function spotsTab() { return [...document.querySelectorAll('#groups button')].find((b) => b.textContent === 'Jetson’s Spots'); }
+function cueAfterPhoto() {
+  settle($('#name').closest('.field') || $('#step-words'));
+  nudge('words', $('#name'), 2, 'Words');
+}
+function cueAfterName() {
+  if (state.name.trim().length >= 2 && !state.line.trim()) nudge('help', $('#help'));
+}
+function cueAfterWords() {
+  if (!state.name.trim() || !state.line.trim()) return;
+  nudge('background', spotsTab() || $('#grid'), 3, 'Background');
+}
+function cueAfterBackground() {
+  if (!state.photo) return;
+  settle($('#step-share'));
+  nudge('share', $('#share'), 4, 'Share');
+}
+function cueAfterShare() {
+  const sec = $('#step-post');
+  if (!sec || sec.hidden) return;
+  nudge('post', $('#post-link'), 5, 'Post it to the wall');
 }
 
 // ---------- cutout (Jetson's Spots) ----------
@@ -213,7 +261,7 @@ $('#photo').addEventListener('change', async (ev) => {
     track('photo_added');
     draw();
     if (state.bg?.sticker) requestCutout();
-    document.querySelector('#step-words')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    cueAfterPhoto(); // also scrolls Words into view, below the sticky preview
   } catch { /* unreadable image */ }
 });
 
@@ -265,11 +313,12 @@ document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListene
   $('#suggestions').hidden = true;
   draw();
 }));
-$('#name').addEventListener('input', (ev) => { state.name = ev.target.value; draw(); });
+$('#name').addEventListener('input', (ev) => { state.name = ev.target.value; draw(); cueAfterName(); cueAfterWords(); });
 $('#line').addEventListener('input', (ev) => {
   state.line = ev.target.value;
   $('#count').textContent = `${state.line.length} / 120`;
   draw();
+  cueAfterWords();
 });
 // Word help: the fixed list shows at once; a few words about the dog ask Claude for five of its own.
 // Nothing typed in the "about" box leaves the browser except to make that one request; it is not stored.
@@ -279,7 +328,7 @@ function showLines(lines) {
   for (const s of lines) {
     const li = document.createElement('li');
     const b = document.createElement('button'); b.type = 'button'; b.textContent = s;
-    b.addEventListener('click', () => { $('#line').value = s; state.line = s; $('#count').textContent = `${s.length} / 120`; saveDraft(); draw(); });
+    b.addEventListener('click', () => { $('#line').value = s; state.line = s; $('#count').textContent = `${s.length} / 120`; saveDraft(); draw(); cueAfterWords(); });
     li.appendChild(b); ul.appendChild(li);
   }
   ul.hidden = false;
@@ -335,13 +384,14 @@ $('#share').addEventListener('click', async () => {
   const file = await makeFile('story');
   const data = { files: [file], title: 'Every dog deserves a dedication', text: `${FOOTER()} ${location.origin}` };
   if (navigator.canShare?.({ files: [file] })) {
-    try { await navigator.share(data); track('shared', { via: 'sheet' }); return; } catch (e) { if (e?.name === 'AbortError') return; }
+    try { await navigator.share(data); track('shared', { via: 'sheet' }); cueAfterShare(); return; } catch (e) { if (e?.name === 'AbortError') return; }
   }
   download(file); track('shared', { via: 'download' });
+  cueAfterShare();
 });
 const FOOTER = () => 'Every dog deserves a dedication.';
 for (const which of ['story', 'feed', 'card']) {
-  $(`#dl-${which}`).addEventListener('click', async () => { download(await makeFile(which)); track('downloaded', { cut: which }); });
+  $(`#dl-${which}`).addEventListener('click', async () => { download(await makeFile(which)); track('downloaded', { cut: which }); cueAfterShare(); });
 }
 
 // ---------- post it to the wall ----------
