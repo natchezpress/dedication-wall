@@ -167,11 +167,29 @@ function cueAfterBackground() {
   settle($('#step-share'));
   nudge('share', $('#share'), 4, 'Share');
 }
-function cueAfterShare() {
+// After Share or any Save, posting becomes the main action: Share steps back to a plain button and a
+// "Put <Name> on the wall" button appears under it. Only when posting is open.
+function promotePost() {
   const sec = $('#step-post');
-  if (!sec || sec.hidden) return;
-  nudge('post', $('#post-link'), 5, 'Post it to the wall');
+  if (!sec || sec.hidden) return false;
+  const cta = $('#post-cta');
+  if (!cta) return false;
+  $('#post-cta-dog').textContent = state.name.trim() || 'my dog';
+  if (cta.hidden) { cta.hidden = false; $('#share').classList.remove('primary'); track('post_cta_shown'); }
+  return true;
 }
+function cueAfterShare() {
+  if (!promotePost()) return;
+  settle($('#post-cta'));
+  nudge('post', $('#post-cta-btn'), 5, 'Post it to the wall');
+}
+$('#post-cta-btn').addEventListener('click', () => {
+  track('post_cta_tapped');
+  const sec = $('#step-post');
+  settle(sec);
+  const email = $('#post-email');
+  if (email && !$('#post-signin').hidden) setTimeout(() => email.focus({ preventScroll: true }), 450);
+});
 
 // ---------- cutout (Jetson's Spots) ----------
 // The photo is downsized here, sent once to /api/cutout, and the PNG that comes back stands in for the
@@ -313,7 +331,7 @@ document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListene
   $('#suggestions').hidden = true;
   draw();
 }));
-$('#name').addEventListener('input', (ev) => { state.name = ev.target.value; draw(); cueAfterName(); cueAfterWords(); });
+$('#name').addEventListener('input', (ev) => { state.name = ev.target.value; draw(); cueAfterName(); cueAfterWords(); const d = $('#post-cta-dog'); if (d) d.textContent = state.name.trim() || 'my dog'; });
 $('#line').addEventListener('input', (ev) => {
   state.line = ev.target.value;
   $('#count').textContent = `${state.line.length} / 120`;
