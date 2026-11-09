@@ -3,7 +3,20 @@ import { inWindow } from './windows.js';
 import { suggest } from './lines.js';
 
 const $ = (s) => document.querySelector(s);
-const track = (name, params = {}) => { try { window.gtag?.('event', name, params); } catch (_) { /* no analytics */ } };
+// GA4 events (G-ZQLVEN820R). The landing utm_source is kept for the session so 'posted' can say which surface
+// brought the dog, not just the visit. Nothing personal is sent: no email, no name, no line.
+const SOURCE_KEY = 'dw_source';
+function landingSource() {
+  try {
+    const q = new URLSearchParams(location.search);
+    const src = q.get('utm_source');
+    if (src) { sessionStorage.setItem(SOURCE_KEY, JSON.stringify({ source: src, medium: q.get('utm_medium') || '', campaign: q.get('utm_campaign') || '' })); }
+    return JSON.parse(sessionStorage.getItem(SOURCE_KEY) || 'null') || { source: document.referrer ? 'referrer' : 'direct', medium: '', campaign: '' };
+  } catch { return { source: 'unknown', medium: '', campaign: '' }; }
+}
+const track = (name, params = {}) => { try { const s = landingSource(); window.gtag?.('event', name, { entry_source: s.source, entry_medium: s.medium, ...params }); } catch (_) { /* no analytics */ } };
+const fired = new Set();
+const trackOnce = (name, params = {}) => { if (fired.has(name)) return; fired.add(name); track(name, params); };
 
 const state = {
   manifest: null,
@@ -106,7 +119,7 @@ function renderGrid() {
     img.loading = 'lazy'; img.alt = ''; img.src = `/backgrounds/thumbs/${e.id}.webp`;
     const span = document.createElement('span'); span.textContent = e.name.replace(/^Spot: /, '');
     b.append(img, span);
-    b.addEventListener('click', () => { selectBackground(e); cueAfterBackground(); });
+    b.addEventListener('click', () => { selectBackground(e); track('background_chosen', { id: e.id, group: e.group }); cueAfterBackground(); });
     grid.appendChild(b);
   }
 }
@@ -118,7 +131,6 @@ async function selectBackground(e) {
     ? 'Drag your dog to where he sat. Pinch or use the slider to resize.'
     : 'Drag the photo to move it. Pinch or use the slider to zoom.';
   renderGrid();
-  track('background_picked', { id: e.id, group: e.group });
   draw();
   if (e.sticker) requestCutout();
   try { state.bgImg = await loadImage(`/backgrounds/${e.file}`); } catch { state.bgImg = null; }
@@ -160,6 +172,7 @@ function cueAfterName() {
 }
 function cueAfterWords() {
   if (!state.name.trim() || !state.line.trim()) return;
+  trackOnce('words_done');
   nudge('background', spotsTab() || $('#grid'), 3, 'Background');
 }
 function cueAfterBackground() {
@@ -185,6 +198,7 @@ function cueAfterShare() {
 }
 $('#post-cta-btn').addEventListener('click', () => {
   track('post_cta_tapped');
+  trackOnce('post_started', { via: 'cta' });
   const sec = $('#step-post');
   settle(sec);
   const email = $('#post-email');
@@ -276,7 +290,7 @@ $('#photo').addEventListener('change', async (ev) => {
     $('#zoom').value = '1';
     $('#photo-label').textContent = 'Change photo';
     idbSet('photo', file); saveDraftNow();
-    track('photo_added');
+    trackOnce('photo_added');
     draw();
     if (state.bg?.sticker) requestCutout();
     cueAfterPhoto(); // also scrolls Words into view, below the sticky preview
@@ -400,16 +414,16 @@ function download(file) {
 }
 $('#share').addEventListener('click', async () => {
   const file = await makeFile('story');
-  const data = { files: [file], title: 'Every dog deserves a dedication', text: `${FOOTER()} ${location.origin}` };
+  const data = { files: [file], title: 'Every dog deserves a dedication', text: `${FOOTER()} ${location.origin}/?utm_source=share&utm_medium=referral&utm_campaign=ops-57` };
   if (navigator.canShare?.({ files: [file] })) {
-    try { await navigator.share(data); track('shared', { via: 'sheet' }); cueAfterShare(); return; } catch (e) { if (e?.name === 'AbortError') return; }
+    try { await navigator.share(data); track('share_tapped', { via: 'sheet' }); cueAfterShare(); return; } catch (e) { if (e?.name === 'AbortError') return; }
   }
-  download(file); track('shared', { via: 'download' });
+  download(file); track('share_tapped', { via: 'download' });
   cueAfterShare();
 });
 const FOOTER = () => 'Every dog deserves a dedication.';
 for (const which of ['story', 'feed', 'card']) {
-  $(`#dl-${which}`).addEventListener('click', async () => { download(await makeFile(which)); track('downloaded', { cut: which }); cueAfterShare(); });
+  $(`#dl-${which}`).addEventListener('click', async () => { download(await makeFile(which)); track('share_tapped', { via: 'save', cut: which }); cueAfterShare(); });
 }
 
 // ---------- post it to the wall ----------
@@ -474,6 +488,7 @@ const post = { config: null, email: '', poll: 0 };
 const postStatus = (t, html = false) => { const el = $('#post-status'); if (html) el.innerHTML = t; else el.textContent = t; };
 
 function showSignedIn(email) {
+  trackOnce('signed_in');
   post.email = email;
   clearInterval(resendTimer);
   $('#post-signin').hidden = true;
@@ -504,7 +519,7 @@ async function sendLink(email, { resend = false } = {}) {
   const r = await fetch('/api/auth/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, next: '/#step-post' }) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.ok) throw new Error(j.error || String(r.status));
-  track(resend ? 'post_link_resent' : 'post_link_sent');
+  track(resend ? 'link_resent' : 'link_sent');
   return j;
 }
 let resendTimer = 0;
@@ -613,6 +628,7 @@ async function initPost() {
   if (location.hash === '#step-post') setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
 }
 for (const id of ['#name', '#line']) $(id).addEventListener('input', saveDraft);
+$('#post-email').addEventListener('focus', () => trackOnce('post_started', { via: 'email' }));
 document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener('change', saveDraft));
 $('#zoom').addEventListener('change', saveDraft);
 preview.addEventListener('pointerup', saveDraft);
@@ -637,7 +653,8 @@ $('#request-form').addEventListener('submit', async (ev) => {
 
 // ---------- boot ----------
 async function boot() {
-  $('#start').addEventListener('click', () => track('started'));
+  $('#start').addEventListener('click', () => track('maker_start_tapped'));
+  trackOnce('maker_open', { posting: 'unknown' });
   const r = await fetch('/backgrounds/backgrounds.json');
   state.manifest = await r.json();
   await ensureFonts();
