@@ -475,7 +475,9 @@ const postStatus = (t, html = false) => { const el = $('#post-status'); if (html
 
 function showSignedIn(email) {
   post.email = email;
+  clearInterval(resendTimer);
   $('#post-signin').hidden = true;
+  $('#post-wait').hidden = true;
   $('#post-form').hidden = false;
   $('#post-who').textContent = email;
   $('#post-dog').textContent = state.name.trim() || 'my dog';
@@ -496,6 +498,38 @@ function startPolling() {
   }, 3000);
 }
 
+// Ask for a sign-in link. The first send swaps the email form for a waiting panel; "Send it again" reuses
+// the same address after a 60-second cooldown (the server enforces one a minute, six a day per address).
+async function sendLink(email, { resend = false } = {}) {
+  const r = await fetch('/api/auth/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, next: '/#step-post' }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) throw new Error(j.error || String(r.status));
+  track(resend ? 'post_link_resent' : 'post_link_sent');
+  return j;
+}
+let resendTimer = 0;
+function armResend(seconds = 60) {
+  const btn = $('#wait-resend');
+  clearInterval(resendTimer);
+  let left = seconds;
+  btn.disabled = true; btn.textContent = `Send it again (${left})`;
+  resendTimer = setInterval(() => {
+    left -= 1;
+    if (left <= 0) { clearInterval(resendTimer); btn.disabled = false; btn.textContent = 'Send it again'; return; }
+    btn.textContent = `Send it again (${left})`;
+  }, 1000);
+}
+function showWaiting(email, devLink) {
+  $('#post-signin').hidden = true;
+  const wait = $('#post-wait');
+  wait.hidden = false;
+  $('#wait-email').textContent = email;
+  const st = $('#wait-status');
+  if (devLink) st.innerHTML = `Test site: no email is sent. <a class="dev-link" href="${devLink}" target="_blank" rel="noopener">Open the sign-in link</a>, then come back here.`;
+  else st.textContent = '';
+  armResend();
+  settle(wait);
+}
 $('#post-link').addEventListener('click', async () => {
   const email = $('#post-email').value.trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { postStatus('A real email, please; the link goes there.'); return; }
@@ -504,19 +538,35 @@ $('#post-link').addEventListener('click', async () => {
   await idbSet('photo', state.photo.file); saveDraftNow();
   postStatus('Sending…');
   try {
-    const r = await fetch('/api/auth/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, next: '/#step-post' }) });
-    const j = await r.json();
-    if (!r.ok || !j.ok) throw new Error(j.error || String(r.status));
-    track('post_link_sent');
-    if (j.dev_link) {
-      postStatus(`Test site: no email is sent. <a class="dev-link" href="${j.dev_link}" target="_blank" rel="noopener">Open the sign-in link</a>, then come back here.`, true);
-    } else {
-      postStatus(`We emailed a sign-in link to ${email}. Tap it on this phone, then come back here; this page will notice.`);
-    }
+    const j = await sendLink(email);
+    post.email = email;
+    postStatus('');
+    showWaiting(email, j.dev_link);
     startPolling();
   } catch (e) {
-    postStatus(`Couldn’t send the link (${e.message}). Try again in a minute.`);
+    postStatus(/minute|plenty|too many/.test(e.message) ? e.message : `Couldn’t send the link (${e.message}). Try again in a minute.`);
   }
+});
+$('#wait-resend').addEventListener('click', async () => {
+  const email = post.email || $('#post-email').value.trim();
+  const st = $('#wait-status');
+  st.textContent = 'Sending again…';
+  try {
+    const j = await sendLink(email, { resend: true });
+    st.textContent = j.dev_link ? '' : 'Sent again. The newest link is the one that works.';
+    if (j.dev_link) st.innerHTML = `Test site: <a class="dev-link" href="${j.dev_link}" target="_blank" rel="noopener">Open the new sign-in link</a>.`;
+    armResend();
+    startPolling();
+  } catch (e) {
+    st.textContent = /minute|plenty|too many/.test(e.message) ? e.message : `Couldn’t send it again (${e.message}).`;
+    armResend(30);
+  }
+});
+$('#wait-change').addEventListener('click', () => {
+  clearInterval(resendTimer);
+  $('#post-wait').hidden = true;
+  $('#post-signin').hidden = false;
+  $('#post-email').focus({ preventScroll: true });
 });
 
 $('#post-form').addEventListener('submit', async (ev) => {
@@ -538,7 +588,7 @@ $('#post-form').addEventListener('submit', async (ev) => {
     status.textContent = 'Posting…';
     const r = await fetch('/api/post', { method: 'POST', body: fd });
     const j = await r.json().catch(() => ({}));
-    if (r.status === 401) { status.textContent = 'Your sign-in expired. Ask for a new link.'; $('#post-form').hidden = true; $('#post-signin').hidden = false; return; }
+    if (r.status === 401) { status.textContent = 'Your sign-in expired. Ask for a new link.'; $('#post-form').hidden = true; $('#post-wait').hidden = true; $('#post-signin').hidden = false; return; }
     if (!r.ok || !j.ok) throw new Error(j.error || String(r.status));
     track('posted', { newsletter: $('#post-news').checked });
     $('#post-form').hidden = true;

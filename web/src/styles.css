@@ -138,3 +138,7 @@ textarea { resize: vertical; }
 .post-cta { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); }
 .post-cta .button { width: 100%; text-align: center; }
 .post-cta .hint { text-align: center; }
+/* Waiting for the sign-in link. */
+.wait { margin-top: 10px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper-2); }
+.wait-title { margin: 0; font-size: 19px; }
+.wait .actions-inline { margin: 12px 0 0; display: flex; gap: 8px; flex-wrap: wrap; }

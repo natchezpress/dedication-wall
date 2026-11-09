@@ -100,11 +100,23 @@ async function authLink(env, request, url) {
   const body = await request.json().catch(() => ({}));
   const email = String(body.email || '').trim().toLowerCase();
   if (!validEmail(email)) return bad('a valid email is needed');
+  // Caps: one link per email per minute, six per email per day, twenty per visitor per day (Resend allows 100/day).
+  const t = now();
+  const day = centralDay();
+  const prior = await env.DB.prepare('SELECT link_sent_at, links_day, links_n FROM owners WHERE email = ?').bind(email).first();
+  if (prior?.link_sent_at && t - prior.link_sent_at < 60) return bad('a link went out less than a minute ago; give it a moment', 429);
+  const todays = prior?.links_day === day ? (prior.links_n || 0) : 0;
+  if (todays >= 6) return bad('that’s plenty of links for today; check your email, including Promotions', 429);
+  const vh = await visitorHash(request, secret(env));
+  const mine = await env.DB.prepare('SELECT n FROM link_uses WHERE visitor = ? AND day = ?').bind(vh, day).first();
+  if ((mine?.n || 0) >= 20) return bad('too many sign-in links from here today', 429);
+  await env.DB.prepare('INSERT INTO link_uses (visitor, day, n) VALUES (?,?,1) ON CONFLICT(visitor, day) DO UPDATE SET n = n + 1').bind(vh, day).run();
   const token = tokenHex(24);
-  const exp = now() + 15 * 60;
-  await env.DB.prepare(`INSERT INTO owners (email, magic_token, token_expires, created_at, last_seen_at) VALUES (?,?,?,?,?)
-    ON CONFLICT(email) DO UPDATE SET magic_token = excluded.magic_token, token_expires = excluded.token_expires`)
-    .bind(email, await sha256(token), exp, now(), now()).run();
+  const exp = t + 15 * 60;
+  await env.DB.prepare(`INSERT INTO owners (email, magic_token, token_expires, created_at, last_seen_at, link_sent_at, links_day, links_n) VALUES (?,?,?,?,?,?,?,1)
+    ON CONFLICT(email) DO UPDATE SET magic_token = excluded.magic_token, token_expires = excluded.token_expires,
+      link_sent_at = excluded.link_sent_at, links_n = CASE WHEN owners.links_day = excluded.links_day THEN owners.links_n + 1 ELSE 1 END, links_day = excluded.links_day`)
+    .bind(email, await sha256(token), exp, t, t, t, day).run();
   const next = typeof body.next === 'string' && body.next.startsWith('/') ? body.next : '/';
   const link = `${site(env)}/api/auth/verify?token=${token}&email=${encodeURIComponent(email)}&next=${encodeURIComponent(next)}`;
   const r = await sendMail(env, {
@@ -122,7 +134,7 @@ async function authVerify(env, request, url) {
   const next = url.searchParams.get('next') || '/';
   const row = await env.DB.prepare('SELECT magic_token, token_expires FROM owners WHERE email = ?').bind(email).first();
   if (!row || !row.magic_token || row.token_expires < now() || row.magic_token !== (await sha256(token))) {
-    return html(simplePage({ title: 'That link has expired', bodyHtml: '<p>Sign-in links last 15 minutes. <a href="/">Go back and ask for a new one.</a></p>', noindex: true }), 400);
+    return html(simplePage({ title: 'That link has expired', bodyHtml: '<p>Sign-in links last 15 minutes. <a href="/#step-post">Go back and ask for a new one.</a> Your dedication is still there.</p>', noindex: true }), 400);
   }
   await env.DB.prepare('UPDATE owners SET magic_token = NULL, token_expires = NULL, last_seen_at = ? WHERE email = ?').bind(now(), email).run();
   const cookie = sessionCookie(await makeSession(secret(env), email), url.protocol === 'https:');
