@@ -101,6 +101,13 @@
         <button type="button" class="button primary" id="post-link">Send me a sign-in link</button>
         <p class="hint" id="post-status"></p>
       </div>
+      <div class="wait" id="post-wait" hidden>
+        <p class="wait-title">Check your email for a sign-in link. It works for 15 minutes.</p>
+        <p class="hint">Don’t see it? Look in Promotions.</p>
+        <p class="hint">Sent to <strong id="wait-email"></strong>. Tap the link on this phone, then come back here; this page will notice.</p>
+        <p class="actions-inline"><button type="button" class="button quiet" id="wait-resend" disabled>Send it again</button> <button type="button" class="button quiet" id="wait-change">Use a different email</button></p>
+        <p class="hint" id="wait-status"></p>
+      </div>
       <form id="post-form" hidden>
         <p class="hint">Signed in as <strong id="post-who"></strong>. <a href="/api/auth/logout" id="post-signout">Not you?</a></p>
         <label class="check"><input type="checkbox" id="post-attest" /><span>I’m 18 or older. This is my dog, or I have permission to share this photo, and anyone in it is fine with that.</span></label>
