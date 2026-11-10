@@ -109,16 +109,21 @@ function drawFooter(ctx, top) {
   ctx.fillText(SITE, MASTER.w / 2, top + 156);
 }
 
-function drawTextBlock(ctx, d, x, w, centerY, align = 'left', ink = INK, quiet = QUIET) {
+function measureTextBlock(ctx, d, w) {
   const modeLabel = d.mode === 'inMemory' ? 'IN MEMORY OF' : 'TO';
   const name = (d.name || 'Your dog').trim();
   const line = (d.line || '').trim();
   const nameFit = fitLines(ctx, name, w, 2, 112, 64, 600);
-  // A short line earns a bigger size; a long one shrinks until it fits in six lines.
-  const lineFit = line ? fitLines(ctx, line, w, 6, 80, 40, 400, 'italic') : { size: 80, lines: [] };
+  // A short line earns a bigger size; a long one shrinks until it fits in five rows.
+  const lineFit = line ? fitLines(ctx, line, w, 5, 80, 44, 400, 'italic') : { size: 80, lines: [] };
   const labelSize = 40, gap1 = 24, gap2 = 36;
   const nameLH = Math.round(nameFit.size * 1.1), lineLH = Math.round(lineFit.size * 1.32);
   const total = labelSize + gap1 + nameFit.lines.length * nameLH + (lineFit.lines.length ? gap2 + lineFit.lines.length * lineLH : 0);
+  return { modeLabel, nameFit, lineFit, labelSize, gap1, gap2, nameLH, lineLH, total };
+}
+
+function drawTextBlock(ctx, d, x, w, centerY, align = 'left', ink = INK, quiet = QUIET) {
+  const { modeLabel, nameFit, lineFit, labelSize, gap1, gap2, nameLH, lineLH, total } = measureTextBlock(ctx, d, w);
   let y = centerY - total / 2;
   const ax = align === 'center' ? x + w / 2 : x;
   ctx.textAlign = align;
@@ -179,17 +184,18 @@ function drawBook(ctx, d, photo) {
   drawTextBlock(ctx, d, TEXT.x, TEXT.w, BOOK.y + BOOK.h / 2);
 }
 
-const SPOT_FOOTER_TOP = 2300;          // pill 2300–2500, inside the feed cut (ends 2502)
+const SPOT_FOOTER_TOP = 2080;          // plate 2080–2280: inside the 1:1 card (ends 2296), so every cut carries it
 const SPOT_FLOOR = SPOT_FOOTER_TOP - 20; // lowest the dog's feet can go
-const SPOT_PANEL = { x: 164, y: 760, w: MASTER.w - 328, h: 560 };
+const SPOT_PANEL = { x: 164, y: 700, w: MASTER.w - 328, pad: 56 }; // top sits inside the 1:1 card (starts 648); height follows the words
 
 function drawSpot(ctx, d, sticker) {
   // the reader's cut-out dog, placed on the photo; words in the open area above with a soft panel
+  const panelH = Math.max(380, measureTextBlock(ctx, d, SPOT_PANEL.w - 120).total + SPOT_PANEL.pad * 2);
   if (sticker?.img) {
     const img = sticker.img;
     const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
     // At scale 1 the dog fits the room between the words panel and the footer, whatever its shape.
-    const room = SPOT_FLOOR - (SPOT_PANEL.y + SPOT_PANEL.h) - 40;
+    const room = SPOT_FLOOR - (SPOT_PANEL.y + panelH) - 40;
     const fitW = Math.min(900, room * iw / ih);
     const baseW = fitW * (sticker.view?.scale || 1);
     const h = baseW * ih / iw;
@@ -201,7 +207,7 @@ function drawSpot(ctx, d, sticker) {
     ctx.drawImage(img, cx - baseW / 2, bottom - h, baseW, h);
     ctx.restore();
   }
-  const panel = SPOT_PANEL;
+  const panel = { ...SPOT_PANEL, h: panelH };
   ctx.save();
   ctx.fillStyle = 'rgba(247,241,230,0.82)';
   ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 40; ctx.shadowOffsetY = 10;

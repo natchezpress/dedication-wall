@@ -126,7 +126,6 @@ function renderGrid() {
 
 async function selectBackground(e) {
   state.bg = e;
-  $('#sticker-hint').hidden = !e.sticker;
   $('#preview-hint').textContent = e.sticker
     ? 'Drag to place your dog on the scene. Pinch or use the slider to resize.'
     : 'Drag the photo to move it. Pinch or use the slider to zoom.';
@@ -140,7 +139,7 @@ async function selectBackground(e) {
 // ---------- next-step glow ----------
 // When a step is done, the next step's main control pulses once (two beats), then stops. Each cue fires
 // once per dedication. The step line is read to screen readers, so the glow is never the only cue.
-const STEP_TOTAL = 5;
+const STEP_TOTAL = 4;
 const cued = new Set();
 function nudge(key, el, stepNo, stepName) {
   if (!el || cued.has(key)) return;
@@ -180,29 +179,23 @@ function cueAfterWords() {
 function cueAfterBackground() {
   if (!state.photo) return;
   settle($('#step-share'));
-  nudge('share', $('#share'), 4, 'Share');
+  nudge('share', $('#post-cta').hidden ? $('#share-instagram') : $('#post-cta-btn'), 4, 'Share');
 }
-// After Share or any Save, posting becomes the main action: Share steps back to a plain button and a
-// "Put <Name> on the wall" button appears under it. Only when posting is open.
-function promotePost() {
-  const sec = $('#step-post');
-  if (!sec || sec.hidden) return false;
-  const cta = $('#post-cta');
-  if (!cta) return false;
-  $('#post-cta-dog').textContent = state.name.trim() || 'my dog';
-  if (cta.hidden) { cta.hidden = false; $('#share').classList.remove('primary'); track('post_cta_shown'); }
-  return true;
-}
+// After a share or a save, the wall button gets one more pulse (only when posting is open).
 function cueAfterShare() {
-  if (!promotePost()) return;
-  settle($('#post-cta'));
-  nudge('post', $('#post-cta-btn'), 5, 'Post it to the wall');
+  if ($('#post-cta').hidden || post.url) return;
+  nudge('post', $('#post-cta-btn'));
+}
+// "Put <Name> on the wall" opens the sign-in flow in place.
+function openPostFlow() {
+  const flow = $('#post-flow');
+  if (flow.hidden) { flow.hidden = false; }
+  settle(flow);
 }
 $('#post-cta-btn').addEventListener('click', () => {
   track('post_cta_tapped');
   trackOnce('post_started', { via: 'cta' });
-  const sec = $('#step-post');
-  settle(sec);
+  openPostFlow();
   const email = $('#post-email');
   if (email && !$('#post-signin').hidden) setTimeout(() => email.focus({ preventScroll: true }), 450);
 });
@@ -294,7 +287,29 @@ async function requestCutout() {
   }
   draw();
 }
-$('#cutout-on').addEventListener('change', () => { if (cutoutOn()) requestCutout(); else cutoutStatus('idle'); draw(); });
+// The box picks the scene: ticked with a book page showing, a Spot is chosen (Gold Leaves in its season,
+// else the hydrant) and the cutout runs; unticked on a Spot, the default page comes back.
+function autoSpot() {
+  const spots = visibleEntries('spot');
+  if (!spots.length) return false;
+  const pick = spots.find((e) => e.id === 'SpotGoldLeaves') || spots[0];
+  state.group = 'spot'; renderTabs();
+  selectBackground(pick);
+  track('background_chosen', { id: pick.id, group: pick.group, via: 'cutout' });
+  return true;
+}
+$('#cutout-on').addEventListener('change', () => {
+  if (cutoutOn()) {
+    if (state.bg?.sticker) requestCutout(); else if (state.photo) autoSpot(); else cutoutStatus('idle');
+  } else {
+    cutoutStatus('idle');
+    if (state.bg?.sticker) {
+      const def = state.manifest.backgrounds.find((e) => (state.mode === 'inMemory' ? e.inMemoryDefault : e.default)) || state.manifest.backgrounds.find((e) => e.default);
+      if (def) { state.group = ['always', 'milestone', 'spot'].includes(def.group) ? def.group : 'today'; renderTabs(); selectBackground(def); }
+    }
+  }
+  draw();
+});
 
 function applyModeToBackground() {
   if (state.mode === 'inMemory' && state.bg && !state.bg.inMemory) {
@@ -317,7 +332,8 @@ $('#photo').addEventListener('change', async (ev) => {
     idbSet('photo', file); saveDraftNow();
     trackOnce('photo_added');
     draw();
-    if (state.bg?.sticker) requestCutout();
+    if (cutoutOn() && !state.bg?.sticker) autoSpot();
+    else if (state.bg?.sticker) requestCutout();
     cueAfterPhoto(); // also scrolls Words into view, below the sticky preview
   } catch { /* unreadable image */ }
 });
@@ -385,7 +401,11 @@ function showLines(lines) {
   for (const s of lines) {
     const li = document.createElement('li');
     const b = document.createElement('button'); b.type = 'button'; b.textContent = s;
-    b.addEventListener('click', () => { $('#line').value = s; state.line = s; $('#count').textContent = `${s.length} / 120`; saveDraft(); draw(); cueAfterWords(); });
+    b.addEventListener('click', () => {
+      $('#line').value = s; state.line = s; $('#count').textContent = `${s.length} / 120`; saveDraft(); draw();
+      $('#help-box').hidden = true; ul.hidden = true; // the help steps aside; the button brings it back
+      cueAfterWords();
+    });
     li.appendChild(b); ul.appendChild(li);
   }
   ul.hidden = false;
@@ -437,18 +457,49 @@ function download(file) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
-$('#share').addEventListener('click', async () => {
-  const file = await makeFile('story');
-  const data = { files: [file], title: 'Every dog deserves a dedication', text: `${FOOTER()} ${location.origin}/?utm_source=share&utm_medium=referral&utm_campaign=ops-57` };
-  if (navigator.canShare?.({ files: [file] })) {
-    try { await navigator.share(data); track('share_tapped', { via: 'sheet' }); cueAfterShare(); return; } catch (e) { if (e?.name === 'AbortError') return; }
-  }
-  download(file); track('share_tapped', { via: 'download' });
-  cueAfterShare();
-});
 const FOOTER = () => 'Every dog deserves a dedication.';
+const makerLink = () => `${location.origin}/?utm_source=share&utm_medium=referral&utm_campaign=ops-57`;
+// Before the dog is on the wall, every app button shares the picture (the share sheet on a phone, a
+// download on a computer): Instagram gets the story, Facebook the feed, Messages the card. Once the
+// page is live, Facebook and Messages carry the page link instead, and Copy link appears.
+async function sharePicture(which, via, text) {
+  const file = await makeFile(which);
+  const data = { files: [file], title: FOOTER(), text };
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share(data); track('share_tapped', { via, how: 'sheet' }); cueAfterShare(); return true; } catch (e) { if (e?.name === 'AbortError') return false; }
+  }
+  download(file); track('share_tapped', { via, how: 'download' });
+  $('#share-hint').textContent = `Saved ${file.name}. Open ${via === 'instagram' ? 'Instagram and add it to your story' : via === 'facebook' ? 'Facebook and post it' : 'Messages and send it'} from your phone.`;
+  cueAfterShare();
+  return true;
+}
+const pageText = () => `${state.mode === 'inMemory' ? 'In memory of' : 'To'} ${state.name.trim() || 'my dog'}: ${state.line.trim()}`;
+$('#share-instagram').addEventListener('click', () => sharePicture('story', 'instagram', post.url ? `${pageText()} ${post.url}` : `${FOOTER()} ${makerLink()}`));
+$('#share-facebook').addEventListener('click', () => {
+  if (post.url) { window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(post.url)}`, '_blank', 'noopener'); track('share_tapped', { via: 'facebook', how: 'link' }); return; }
+  sharePicture('feed', 'facebook', `${FOOTER()} ${makerLink()}`);
+});
+$('#share-messages').addEventListener('click', () => {
+  if (post.url) { location.href = `sms:?&body=${encodeURIComponent(`${pageText()} ${post.url}`)}`; track('share_tapped', { via: 'messages', how: 'link' }); return; }
+  sharePicture('card', 'messages', `${FOOTER()} ${makerLink()}`);
+});
+$('#share-save').addEventListener('click', () => {
+  const menu = $('#save-menu'); const btn = $('#share-save');
+  menu.hidden = !menu.hidden; btn.setAttribute('aria-expanded', String(!menu.hidden));
+});
 for (const which of ['story', 'feed', 'card']) {
   $(`#dl-${which}`).addEventListener('click', async () => { download(await makeFile(which)); track('share_tapped', { via: 'save', cut: which }); cueAfterShare(); });
+}
+$('#share-copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(post.url); $('#share-hint').textContent = 'Link copied.'; track('share_tapped', { via: 'copy' }); }
+  catch { $('#share-hint').textContent = post.url; }
+});
+// After the post: the share row works the live page.
+function shareLivePage(url) {
+  post.url = url;
+  $('#share-label').textContent = `Share ${state.name.trim() || 'your dog'}’s page:`;
+  $('#share-copy').hidden = false;
+  $('#share-hint').textContent = 'Facebook and Messages carry the link to the page; Instagram gets the story picture.';
 }
 
 // ---------- post it to the wall ----------
@@ -509,13 +560,14 @@ async function restoreDraft() {
 }
 function clearDraft() { try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } idbDel('photo'); }
 
-const post = { config: null, email: '', poll: 0 };
+const post = { config: null, email: '', poll: 0, url: '' };
 const postStatus = (t, html = false) => { const el = $('#post-status'); if (html) el.innerHTML = t; else el.textContent = t; };
 
 function showSignedIn(email) {
   trackOnce('signed_in');
   post.email = email;
   clearInterval(resendTimer);
+  $('#post-flow').hidden = false;
   $('#post-signin').hidden = true;
   $('#post-wait').hidden = true;
   $('#post-form').hidden = false;
@@ -541,7 +593,7 @@ function startPolling() {
 // Ask for a sign-in link. The first send swaps the email form for a waiting panel; "Send it again" reuses
 // the same address after a 60-second cooldown (the server enforces one a minute, six a day per address).
 async function sendLink(email, { resend = false } = {}) {
-  const r = await fetch('/api/auth/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, next: '/#step-post' }) });
+  const r = await fetch('/api/auth/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, next: '/#step-share' }) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.ok) throw new Error(j.error || String(r.status));
   track(resend ? 'link_resent' : 'link_sent');
@@ -636,6 +688,7 @@ $('#post-form').addEventListener('submit', async (ev) => {
     $('#done-email').textContent = post.email;
     const a = $('#done-url'); a.href = j.url; a.textContent = j.url.replace(/^https?:\/\//, '');
     $('#post-done').hidden = false;
+    shareLivePage(j.url);
     $('#post-done').scrollIntoView({ behavior: 'smooth', block: 'start' });
     clearDraft();
   } catch (e) {
@@ -646,11 +699,12 @@ $('#done-again').addEventListener('click', () => { location.href = '/'; });
 
 async function initPost() {
   post.config = await fetchConfig();
-  const sec = $('#step-post');
-  if (!post.config?.posting) { sec.hidden = true; return; }
-  sec.hidden = false;
+  const cta = $('#post-cta');
+  if (!post.config?.posting) { cta.hidden = true; $('#share-label').textContent = 'Share the page:'; return; }
+  cta.hidden = false;
+  $('#post-cta-dog').textContent = state.name.trim() || 'my dog';
   if (post.config.signed_in) showSignedIn(post.config.signed_in);
-  if (location.hash === '#step-post') setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+  if (location.hash === '#step-share' || location.hash === '#step-post') setTimeout(() => settle($('#step-share')), 300);
 }
 for (const id of ['#name', '#line']) $(id).addEventListener('input', saveDraft);
 $('#post-email').addEventListener('focus', () => trackOnce('post_started', { via: 'email' }));
@@ -674,6 +728,33 @@ $('#request-form').addEventListener('submit', async (ev) => {
   } catch {
     status.innerHTML = 'Couldn’t send just now. <a href="mailto:admin@brockalston.com?subject=Background%20request&body=' + encodeURIComponent(text) + '">Email it instead</a>.';
   }
+});
+
+// ---------- tell friends about the wall ----------
+// Nothing leaves this page: the button opens the reader's own mail app with the addresses filled in.
+const WALL_LINK = () => `${location.origin}/?utm_source=tell&utm_medium=email&utm_campaign=ops-57`;
+const TELL_SUBJECT = 'Every dog deserves a dedication';
+const TELL_BODY = () => `I made a dedication page for my dog here, and thought of yours. It takes about a minute, on your phone:\n\n${WALL_LINK()}\n\nIt comes from the novel Jetson’s Journey by Brock Alston.`;
+$('#tell-form').addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  const status = $('#tell-status');
+  const raw = $('#tell-emails').value;
+  const all = [...new Set(raw.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean))];
+  const good = all.filter((x) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+  if (!good.length) { status.textContent = 'An email address or two first.'; $('#tell-emails').focus(); return; }
+  if (good.length > 5) { status.textContent = 'Five at a time, please; send the rest in a second note.'; return; }
+  status.textContent = all.length > good.length ? `Skipped ${all.length - good.length} that didn’t look like an address.` : '';
+  location.href = `mailto:${encodeURIComponent(good.join(','))}?subject=${encodeURIComponent(TELL_SUBJECT)}&body=${encodeURIComponent(TELL_BODY())}`;
+  track('tell_friends', { count: good.length });
+});
+$('#tell-share').addEventListener('click', async () => {
+  const data = { title: TELL_SUBJECT, text: 'Make a dedication page for your dog, in about a minute.', url: `${location.origin}/?utm_source=tell&utm_medium=share&utm_campaign=ops-57` };
+  if (navigator.share) { try { await navigator.share(data); track('tell_friends', { via: 'sheet' }); } catch { /* closed */ } return; }
+  try { await navigator.clipboard.writeText(data.url); $('#tell-status').textContent = 'Link copied; paste it anywhere.'; } catch { $('#tell-status').textContent = data.url; }
+});
+$('#tell-copy').addEventListener('click', async () => {
+  const url = `${location.origin}/?utm_source=tell&utm_medium=copy&utm_campaign=ops-57`;
+  try { await navigator.clipboard.writeText(url); $('#tell-status').textContent = 'Link copied.'; track('tell_friends', { via: 'copy' }); } catch { $('#tell-status').textContent = url; }
 });
 
 // ---------- boot ----------

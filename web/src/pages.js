@@ -43,6 +43,10 @@ footer a{color:var(--quiet)}
 .owner .lab{font-family:var(--sans);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);margin-bottom:6px}
 .owner p{margin:0 0 8px}
 .owner textarea{width:100%;font:inherit;font-size:16px;padding:10px 12px;border:1px solid #e3d9c7;border-radius:10px;background:#fff;color:var(--ink);resize:vertical}
+.tell{max-width:640px;margin:36px auto 0;padding:18px 0 0;border-top:1px solid #e3d9c7}
+.tell h2{font-size:24px;font-weight:500;margin:0 0 6px}
+.tell label{display:block;margin:10px 0 6px}.tell label span{display:block;font-size:15px;color:var(--quiet);margin-bottom:4px}
+.tell input{width:100%;font:inherit;font-size:17px;padding:10px 12px;border:1px solid #e3d9c7;border-radius:10px;background:#fff;color:var(--ink)}
 `;
 
 function layout({ title, description, image, url, body, nav = '', noindex = false }) {
@@ -89,6 +93,40 @@ const nav = (on) => ['/wall|The wall', '/memory|In Memory', '/|Make yours'].map(
   return `<a href="${href}"${href === on ? ' class="on"' : ''}>${label}</a>`;
 }).join('');
 
+// Tell friends about the wall: up to five addresses, any separator; opens the reader's own mail app.
+// Nothing is sent from the server and no address is kept.
+const tellHtml = (site) => `
+<section class="tell" aria-labelledby="tell-title">
+  <h2 id="tell-title">Know a dog who deserves one?</h2>
+  <p class="small">Up to five friends. This opens your own mail app with a short note and the link; nothing is sent from here, and we never see the addresses.</p>
+  <form id="tell-form">
+    <label><span>Friends’ emails (commas, spaces or semicolons between them)</span><input type="text" id="tell-emails" inputmode="email" autocomplete="off" placeholder="ann@example.com, ben@example.com" /></label>
+    <p class="small" id="tell-status"></p>
+    <div class="row"><button class="btn" type="submit">Open my mail</button><button class="btn quiet" type="button" id="tell-share">Share the wall</button><button class="btn quiet" type="button" id="tell-copy">Copy link</button></div>
+  </form>
+</section>
+<script>
+(function(){
+  var link=${JSON.stringify(site)}+'/?utm_source=tell&utm_medium=email&utm_campaign=ops-57';
+  var subject='Every dog deserves a dedication';
+  var body='I found a wall of dedications people wrote to their dogs, and thought of yours. Making one takes about a minute, on your phone:\n\n'+link+'\n\nIt comes from the novel Jetson’s Journey by Brock Alston.';
+  var f=document.getElementById('tell-form'),st=document.getElementById('tell-status'),inp=document.getElementById('tell-emails');
+  function ev(n,p){try{gtag('event',n,p||{})}catch(e){}}
+  f.addEventListener('submit',function(e){e.preventDefault();
+    var all=inp.value.split(/[\s,;]+/).map(function(x){return x.trim()}).filter(Boolean);all=all.filter(function(x,i){return all.indexOf(x)===i});
+    var good=all.filter(function(x){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x)});
+    if(!good.length){st.textContent='An email address or two first.';inp.focus();return}
+    if(good.length>5){st.textContent='Five at a time, please; send the rest in a second note.';return}
+    st.textContent=all.length>good.length?'Skipped '+(all.length-good.length)+' that didn’t look like an address.':'';
+    location.href='mailto:'+encodeURIComponent(good.join(','))+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);ev('tell_friends',{count:good.length,page:'wall'})});
+  document.getElementById('tell-share').addEventListener('click',function(){var u=${JSON.stringify(site)}+'/wall?utm_source=tell&utm_medium=share&utm_campaign=ops-57';
+    if(navigator.share){navigator.share({title:subject,text:'Dogs and the dedications their people wrote for them.',url:u}).then(function(){ev('tell_friends',{via:'sheet',page:'wall'})}).catch(function(){});return}
+    navigator.clipboard.writeText(u).then(function(){st.textContent='Link copied; paste it anywhere.'}).catch(function(){st.textContent=u})});
+  document.getElementById('tell-copy').addEventListener('click',function(){var u=${JSON.stringify(site)}+'/wall?utm_source=tell&utm_medium=copy&utm_campaign=ops-57';
+    navigator.clipboard.writeText(u).then(function(){st.textContent='Link copied.';ev('tell_friends',{via:'copy',page:'wall'})}).catch(function(){st.textContent=u})});
+})();
+</script>`;
+
 const cardHtml = (e) => `<a class="card" href="/d/${h(e.id)}"><img src="/p/${h(e.id)}/card.jpg" alt="${h(e.dog_name)}" loading="lazy" /><div class="meta"><span class="name">${h(e.dog_name)}</span><span class="hearts">♥ ${e.hearts}</span></div></a>`;
 
 export function wallPage({ entries, dotd, memory = false, site }) {
@@ -99,7 +137,8 @@ export function wallPage({ entries, dotd, memory = false, site }) {
   const body = `
 ${!memory && dotd ? `<div class="dotd"><img src="/p/${h(dotd.id)}/card.jpg" alt="" /><div><div class="lab">Dog of the day</div><div class="dogname" style="font-size:26px;margin:2px 0 4px">${h(dotd.dog_name)}</div><div class="line" style="font-size:18px;margin:0 0 6px">${h(dotd.line)}</div><a href="/d/${h(dotd.id)}">See the page →</a></div></div>` : ''}
 <p class="lede">${memory ? 'For the dogs who are gone. Hearts are welcome.' : 'Newest first. Tap a dog to see the page and leave a heart.'}</p>
-${entries.length ? `<div class="grid">${entries.map(cardHtml).join('')}</div>` : `<div class="empty">${memory ? 'No dedications here yet.' : 'The wall is empty for now. Be the first: <a href="/">make a dedication</a>.'}</div>`}`;
+${entries.length ? `<div class="grid">${entries.map(cardHtml).join('')}</div>` : `<div class="empty">${memory ? 'No dedications here yet.' : 'The wall is empty for now. Be the first: <a href="/">make a dedication</a>.'}</div>`}
+${tellHtml(site)}`;
   return layout({ title, description, url: `${site}${memory ? '/memory' : '/wall'}`, body, nav: nav(memory ? '/memory' : '/wall') });
 }
 
