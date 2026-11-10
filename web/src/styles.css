@@ -60,7 +60,9 @@ h2 { font-size: 24px; display: flex; align-items: center; gap: 10px; }
 .button.quiet { border-color: var(--line); color: var(--quiet); background: transparent; }
 .button:disabled { opacity: 0.5; cursor: default; }
 .maker { padding-top: 8px; }
-.preview-wrap { position: sticky; top: 0; z-index: 2; background: var(--paper); padding: 8px 0 6px; text-align: center; }
+/* On a phone the preview scrolls with the page (it took most of the screen when it stayed put); on wider
+   screens it sits beside the steps and stays in view. */
+.preview-wrap { position: static; background: var(--paper); padding: 8px 0 6px; text-align: center; }
 .preview {
   width: min(100%, 280px); height: auto; aspect-ratio: 9 / 16;
   border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.18);
