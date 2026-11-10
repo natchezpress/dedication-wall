@@ -84,26 +84,29 @@ function drawBackground(ctx, bg, img) {
   }
 }
 
-function luminanceAt(ctx, x, y, w, h) {
-  const d = ctx.getImageData(x, y, w, h).data;
-  let s = 0, n = 0;
-  for (let i = 0; i < d.length; i += 4 * 97) { s += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]; n++; }
-  return n ? s / n : 128;
-}
+// The footer sits on a small paper plate, like the words panel on a Spot, so it reads the same on
+// leaves, sky or a sidewalk. Nothing else is drawn in its band.
+const FOOTER = { h: 200, pad: 80, line: 64, site: 44 };
 
-function drawFooter(ctx, yTop) {
-  const lum = luminanceAt(ctx, 300, yTop - 10, MASTER.w - 600, 140);
-  const dark = lum < 140;
+function drawFooter(ctx, top) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
-  if (dark) { ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = 14; }
-  ctx.fillStyle = dark ? 'rgba(255,250,240,0.92)' : 'rgba(43,38,34,0.85)';
-  ctx.font = `italic 400 46px ${SERIF}`;
-  ctx.fillText(FOOTER_LINE, MASTER.w / 2, yTop + 40);
-  ctx.font = `400 36px ${SERIF}`;
-  ctx.fillStyle = dark ? 'rgba(255,250,240,0.78)' : 'rgba(43,38,34,0.65)';
-  ctx.fillText(SITE, MASTER.w / 2, yTop + 94);
-  ctx.shadowBlur = 0;
+  ctx.font = `italic 600 ${FOOTER.line}px ${SERIF}`;
+  const lineW = ctx.measureText(FOOTER_LINE).width;
+  ctx.font = `500 ${FOOTER.site}px ${SERIF}`;
+  const siteW = ctx.measureText(SITE).width;
+  const w = Math.min(MASTER.w - 160, Math.max(lineW, siteW) + FOOTER.pad * 2);
+  ctx.save();
+  ctx.fillStyle = 'rgba(247,241,230,0.86)';
+  ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 40; ctx.shadowOffsetY = 10;
+  roundRect(ctx, (MASTER.w - w) / 2, top, w, FOOTER.h, 24); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = INK;
+  ctx.font = `italic 600 ${FOOTER.line}px ${SERIF}`;
+  ctx.fillText(FOOTER_LINE, MASTER.w / 2, top + 90);
+  ctx.fillStyle = QUIET;
+  ctx.font = `500 ${FOOTER.site}px ${SERIF}`;
+  ctx.fillText(SITE, MASTER.w / 2, top + 156);
 }
 
 function drawTextBlock(ctx, d, x, w, centerY, align = 'left', ink = INK, quiet = QUIET) {
@@ -176,6 +179,9 @@ function drawBook(ctx, d, photo) {
   drawTextBlock(ctx, d, TEXT.x, TEXT.w, BOOK.y + BOOK.h / 2);
 }
 
+const SPOT_FOOTER_TOP = 2300;          // pill 2300–2500, inside the feed cut (ends 2502)
+const SPOT_FLOOR = SPOT_FOOTER_TOP - 20; // lowest the dog's feet can go
+
 function drawSpot(ctx, d, sticker) {
   // the reader's cut-out dog, placed on the photo; words in the open area above with a soft panel
   if (sticker?.img) {
@@ -184,7 +190,8 @@ function drawSpot(ctx, d, sticker) {
     const baseW = 900 * (sticker.view?.scale || 1);
     const h = baseW * ih / iw;
     const cx = MASTER.w / 2 + (sticker.view?.dx || 0);
-    const bottom = 2320 + (sticker.view?.dy || 0);
+    // The dog can be moved up and sideways, never down into the footer's band.
+    const bottom = Math.min(SPOT_FLOOR, SPOT_FLOOR + (sticker.view?.dy || 0));
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = 30; ctx.shadowOffsetY = 12;
     ctx.drawImage(img, cx - baseW / 2, bottom - h, baseW, h);
@@ -214,7 +221,7 @@ export function render(canvas, d, bg, bgImg, photo) {
   else { ctx.fillStyle = PAPER; ctx.fillRect(0, 0, MASTER.w, MASTER.h); }
   if (bg?.sticker) {
     drawSpot(ctx, d, photo);
-    drawFooter(ctx, 2380);
+    drawFooter(ctx, SPOT_FOOTER_TOP);
   } else {
     drawBook(ctx, d, photo);
     drawFooter(ctx, BOOK.y + BOOK.h + 60);
