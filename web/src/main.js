@@ -244,11 +244,34 @@ function hasTransparentCorners(img) {
   } catch { return false; }
 }
 
+// The cut-out comes back at the photo's full size with the background cleared, so its edges are air.
+// Trimming to the opaque box makes the sticker's bottom mean the paws, so it sits on the scene.
+function trimAlpha(img) {
+  try {
+    const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0);
+    const a = x.getImageData(0, 0, w, h).data;
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    for (let y = 0, i = 3; y < h; y++) for (let xx = 0; xx < w; xx++, i += 4) {
+      if (a[i] > 24) { if (xx < minX) minX = xx; if (xx > maxX) maxX = xx; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+    }
+    if (maxX < 0) return img;
+    const pad = Math.round(Math.max(w, h) * 0.02);
+    const sx = Math.max(0, minX - pad), sy = Math.max(0, minY - pad);
+    const sw = Math.min(w, maxX + pad + 1) - sx, sh = Math.min(h, maxY + pad + 1) - sy;
+    if (sw < 16 || sh < 16) return img;
+    const out = document.createElement('canvas'); out.width = sw; out.height = sh;
+    out.getContext('2d').drawImage(c, sx, sy, sw, sh, 0, 0, sw, sh);
+    return out;
+  } catch { return img; }
+}
+
 async function requestCutout() {
   if (!state.photo?.file || !cutoutOn()) return;
   const file = state.photo.file;
-  if (state.cutout && state.cutout.file === file) { cutoutStatus(state.cutout.status === 'ok' ? 'ok' : state.cutout.status === 'own' ? 'own' : state.cutout.status); return; }
-  if (file.type === 'image/png' && hasTransparentCorners(state.photo.img)) { state.cutout = { file, status: 'own' }; cutoutStatus('own'); return; }
+  if (state.cutout && state.cutout.file === file) { cutoutStatus(state.cutout.own ? 'own' : state.cutout.status); return; }
+  if (file.type === 'image/png' && hasTransparentCorners(state.photo.img)) { state.cutout = { img: trimAlpha(state.photo.img), file, status: 'ok', own: true }; cutoutStatus('own'); draw(); return; }
   state.cutout = { file, status: 'working' };
   cutoutStatus('working');
   try {
@@ -258,7 +281,7 @@ async function requestCutout() {
     if (!r.ok) throw new Error(String(r.status));
     const blob = await r.blob();
     if (!blob.type.startsWith('image/png')) throw new Error('not png');
-    const img = await loadImage(URL.createObjectURL(blob));
+    const img = trimAlpha(await loadImage(URL.createObjectURL(blob)));
     if (state.photo?.file !== file) return; // the reader changed photos meanwhile
     state.cutout = { img, file, status: 'ok' };
     cutoutStatus('ok');
