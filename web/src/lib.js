@@ -203,7 +203,7 @@ const WORD_SYSTEM = [
   'Living dog: present tense. In memory: past tense, tender, not maudlin.',
   'Use the specific details given; invent nothing about the dog. Never include a person’s name.',
   'Plain words. Warm, exact, a little funny where the details allow. No clichés ("rainbow bridge", "furry friend", "fur baby"), no emojis, no hashtags, no exclamation marks, no quotation marks.',
-  'Each line under 100 characters, ending with a period. Five lines, each different in angle.',
+  'Each line 40 to 75 characters, never more than 80, ending with a period: one thought, said once. Five lines, each different in angle; at least two under 55 characters.',
   'Answer with JSON only: {"lines": ["who ...", "who ...", "who ...", "who ...", "who ..."]}.',
 ].join(' ');
 
