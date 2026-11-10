@@ -115,10 +115,12 @@ textarea { resize: vertical; }
 .dev-link { display: inline-block; margin-top: 8px; font-family: var(--sans); font-size: 14px; }
 .bottom { text-align: center; color: var(--quiet); font-size: 15px; padding-bottom: 48px; }
 @media (min-width: 720px) {
-  .maker { display: grid; grid-template-columns: 300px 1fr; gap: 28px; align-items: start; }
-  .preview-wrap { position: sticky; top: 16px; }
+  /* Steps down the left, the preview on the right. The preview spans every row, so the steps
+     stack with no gap and the preview stays in view while they scroll. */
+  .maker { max-width: 800px; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 0 40px; align-items: start; }
+  .preview-wrap { grid-column: 2; grid-row: 1 / span 12; position: sticky; top: 16px; padding-top: 0; }
   .preview { width: 100%; }
-  .step { grid-column: 2; }
+  .step { grid-column: 1; }
   .step:first-of-type { margin-top: 0; border-top: 0; }
 }
 

@@ -128,7 +128,7 @@ async function selectBackground(e) {
   state.bg = e;
   $('#sticker-hint').hidden = !e.sticker;
   $('#preview-hint').textContent = e.sticker
-    ? 'Drag your dog to where he sat. Pinch or use the slider to resize.'
+    ? 'Drag to place your dog on the scene. Pinch or use the slider to resize.'
     : 'Drag the photo to move it. Pinch or use the slider to zoom.';
   renderGrid();
   draw();
@@ -156,9 +156,11 @@ function nudge(key, el, stepNo, stepName) {
 // A gentle scroll, only when no keyboard can be up (after the photo, after the background).
 function settle(el) {
   if (!el || document.activeElement?.matches?.('input, textarea')) return;
-  // The preview is sticky at the top on phones; land the step just under it.
+  // The preview is sticky at the top on phones; land the step just under it. On wider screens it
+  // sits beside the steps, so the step can come to the top.
   const wrap = document.querySelector('.preview-wrap');
-  const sticky = wrap && getComputedStyle(wrap).position === 'sticky' ? wrap.offsetHeight + 8 : 0;
+  const beside = window.matchMedia('(min-width: 720px)').matches;
+  const sticky = !beside && wrap && getComputedStyle(wrap).position === 'sticky' ? wrap.offsetHeight + 8 : 16;
   el.style.scrollMarginTop = `${sticky}px`;
   try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch { /* old browser */ }
 }
@@ -212,7 +214,7 @@ const cutoutOn = () => !!$('#cutout-on')?.checked;
 const CUTOUT_HINT = {
   idle: 'Pick a photo and the dog is cut out automatically. If it comes out wrong, untick the box and use a cut-out of your own: on an iPhone, press and hold the dog in Photos, then Copy or Share it as a sticker.',
   working: 'Cutting your dog out of the photo…',
-  ok: 'Done. Drag your dog to where he sat; untick the box to use the photo as it was.',
+  ok: 'Done. Drag to place your dog on the scene; untick the box to use the photo as it was.',
   own: 'That photo already has no background, so it is used as is.',
   failed: 'Couldn’t cut this one out just now. Use a cut-out of your own: on an iPhone, press and hold the dog in Photos, then Copy or Share it as a sticker.',
 };
