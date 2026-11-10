@@ -517,12 +517,18 @@ $('#share-copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(post.url); $('#share-hint').textContent = 'Link copied.'; track('share_tapped', { via: 'copy' }); }
   catch { $('#share-hint').textContent = post.url; }
 });
-// After the post: the share row works the live page.
+// Sharing comes after the wall, never instead of it: the share row appears once the page exists,
+// and every share carries the page. (When posting is off, the row shows on its own as the only way out.)
+function showShareRow() {
+  for (const id of ['#share-label', '#share-row', '#share-hint']) $(id).hidden = false;
+}
 function shareLivePage(url) {
   post.url = url;
+  showShareRow();
   $('#share-label').textContent = `Share ${state.name.trim() || 'your dog'}’s page:`;
   $('#share-copy').hidden = false;
   $('#share-hint').textContent = 'Facebook and Messages carry the link to the page; Instagram gets the story picture.';
+  setTimeout(() => nudge('share-live', $('#share-instagram')), 600);
 }
 
 // ---------- post it to the wall ----------
@@ -750,7 +756,7 @@ function watchForLive(id) {
 async function initPost() {
   post.config = await fetchConfig();
   const cta = $('#post-cta');
-  if (!post.config?.posting) { cta.hidden = true; $('#share-label').textContent = 'Share the page:'; return; }
+  if (!post.config?.posting) { cta.hidden = true; showShareRow(); return; }
   cta.hidden = false;
   $('#post-cta-dog').textContent = state.name.trim() || 'my dog';
   if (post.config.signed_in) showSignedIn(post.config.signed_in);
