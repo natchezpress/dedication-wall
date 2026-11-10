@@ -1,4 +1,4 @@
-import { MASTER, CUTS, render, cut, ensureFonts } from './compose.js';
+import { MASTER, CUTS, render, cut, ensureFonts, sceneHit } from './compose.js';
 import { inWindow } from './windows.js';
 import { suggest } from './lines.js';
 
@@ -23,12 +23,15 @@ const state = {
   bg: null,          // manifest entry
   bgImg: null,
   photo: null,       // {img, view:{scale,dx,dy}, file}
-  cutout: null,      // {img, file, status:'working'|'ok'|'failed'} — the dog with no background, for Jetson's Spots
+  cutout: null,      // {img, file, status:'working'|'ok'|'failed'} — the dog with no background, for the scene layout
+  layout: { panelDy: 0, footerDy: 0 }, // where the reader moved the words panel and the footer plate on a scene
+  bgChosen: false,   // the reader picked a background (so the cutout box leaves it alone)
   mode: 'for',
   name: '',
   line: '',
   group: 'today',
 };
+const words = () => ({ mode: state.mode, name: state.name, line: state.line, layout: state.layout });
 
 const master = document.createElement('canvas');
 master.width = MASTER.w; master.height = MASTER.h;
@@ -49,18 +52,25 @@ function loadImage(src) {
   return p;
 }
 
-// For a Spots background, the cutout (if on and ready) stands in for the photo; the drag/zoom view is shared.
+// With the box ticked and the cutout ready, the dog stands on the background (the scene layout) on any
+// background; otherwise the photo sits in the book page. The drag/zoom view is shared.
 function photoForRender() {
-  if (state.bg?.sticker && cutoutOn() && state.cutout?.status === 'ok' && state.cutout.file === state.photo?.file) {
-    return { img: state.cutout.img, view: state.photo.view, file: state.photo.file };
+  if (cutoutOn() && state.cutout?.status === 'ok' && state.cutout.file === state.photo?.file) {
+    return { img: state.cutout.img, view: state.photo.view, file: state.photo.file, sticker: true };
   }
   return state.photo;
+}
+const isScene = () => !!photoForRender()?.sticker;
+function updateHint() {
+  $('#preview-hint').textContent = isScene()
+    ? 'Drag your dog, the words or the footer to move them. Pinch or use the slider to resize the dog.'
+    : 'Drag the photo to move it. Pinch or use the slider to zoom.';
 }
 let raf = 0;
 function draw() {
   cancelAnimationFrame(raf);
   raf = requestAnimationFrame(() => {
-    render(master, { mode: state.mode, name: state.name, line: state.line }, state.bg, state.bgImg, photoForRender());
+    render(master, words(), state.bg, state.bgImg, photoForRender());
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const cssW = preview.clientWidth || 280, cssH = cssW * 16 / 9;
     if (preview.width !== Math.round(cssW * dpr)) { preview.width = Math.round(cssW * dpr); preview.height = Math.round(cssH * dpr); }
@@ -119,19 +129,17 @@ function renderGrid() {
     img.loading = 'lazy'; img.alt = ''; img.src = `/backgrounds/thumbs/${e.id}.webp`;
     const span = document.createElement('span'); span.textContent = e.name.replace(/^Spot: /, '');
     b.append(img, span);
-    b.addEventListener('click', () => { selectBackground(e); track('background_chosen', { id: e.id, group: e.group }); cueAfterBackground(); });
+    b.addEventListener('click', () => { state.bgChosen = true; selectBackground(e); track('background_chosen', { id: e.id, group: e.group }); cueAfterBackground(); });
     grid.appendChild(b);
   }
 }
 
 async function selectBackground(e) {
   state.bg = e;
-  $('#preview-hint').textContent = e.sticker
-    ? 'Drag to place your dog on the scene. Pinch or use the slider to resize.'
-    : 'Drag the photo to move it. Pinch or use the slider to zoom.';
+  updateHint();
   renderGrid();
   draw();
-  if (e.sticker) requestCutout();
+  if (cutoutOn()) requestCutout();
   try { state.bgImg = await loadImage(`/backgrounds/${e.file}`); } catch { state.bgImg = null; }
   if (state.bg === e) draw();
 }
@@ -205,9 +213,9 @@ $('#post-cta-btn').addEventListener('click', () => {
 // photo in the sticker layout. A transparent PNG the reader brought is used as is.
 const cutoutOn = () => !!$('#cutout-on')?.checked;
 const CUTOUT_HINT = {
-  idle: 'Pick a photo and the dog is cut out automatically. If it comes out wrong, untick the box and use a cut-out of your own: on an iPhone, press and hold the dog in Photos, then Copy or Share it as a sticker.',
+  idle: 'Ticked, your dog is lifted out of the photo and set on the background like a sticker, with the words above and the footer below. Untick it for the book page with the photo as it is.',
   working: 'Cutting your dog out of the photo…',
-  ok: 'Done. Drag to place your dog on the scene; untick the box to use the photo as it was.',
+  ok: 'Done. Drag your dog, the words or the footer to move them; untick the box to use the photo as it was.',
   own: 'That photo already has no background, so it is used as is.',
   failed: 'Couldn’t cut this one out just now. Use a cut-out of your own: on an iPhone, press and hold the dog in Photos, then Copy or Share it as a sticker.',
 };
@@ -264,7 +272,7 @@ async function requestCutout() {
   if (!state.photo?.file || !cutoutOn()) return;
   const file = state.photo.file;
   if (state.cutout && state.cutout.file === file) { cutoutStatus(state.cutout.own ? 'own' : state.cutout.status); return; }
-  if (file.type === 'image/png' && hasTransparentCorners(state.photo.img)) { state.cutout = { img: trimAlpha(state.photo.img), file, status: 'ok', own: true }; cutoutStatus('own'); draw(); return; }
+  if (file.type === 'image/png' && hasTransparentCorners(state.photo.img)) { state.cutout = { img: trimAlpha(state.photo.img), file, status: 'ok', own: true }; cutoutStatus('own'); updateHint(); draw(); return; }
   state.cutout = { file, status: 'working' };
   cutoutStatus('working');
   try {
@@ -278,17 +286,20 @@ async function requestCutout() {
     if (state.photo?.file !== file) return; // the reader changed photos meanwhile
     state.cutout = { img, file, status: 'ok' };
     cutoutStatus('ok');
+    updateHint();
     track('cutout_ok');
   } catch (e) {
     if (state.photo?.file !== file) return;
     state.cutout = { file, status: 'failed' };
     cutoutStatus('failed');
+    updateHint();
     track('cutout_failed', { why: e.message });
   }
   draw();
 }
-// The box picks the scene: ticked with a book page showing, a Spot is chosen (Gold Leaves in its season,
-// else the hydrant) and the cutout runs; unticked on a Spot, the default page comes back.
+// The box is the layout: ticked, the dog is cut out and stands on whatever background is chosen; unticked,
+// the book page shows the photo as it is. Until the reader picks a background, ticking the box (or adding a
+// photo with it ticked) chooses a Spot to stand on: Gold Leaves in its season, else the hydrant.
 function autoSpot() {
   const spots = visibleEntries('spot');
   if (!spots.length) return false;
@@ -300,14 +311,12 @@ function autoSpot() {
 }
 $('#cutout-on').addEventListener('change', () => {
   if (cutoutOn()) {
-    if (state.bg?.sticker) requestCutout(); else if (state.photo) autoSpot(); else cutoutStatus('idle');
+    if (state.photo && !state.bgChosen && !state.bg?.sticker) autoSpot();
+    if (state.photo) requestCutout(); else cutoutStatus('idle');
   } else {
     cutoutStatus('idle');
-    if (state.bg?.sticker) {
-      const def = state.manifest.backgrounds.find((e) => (state.mode === 'inMemory' ? e.inMemoryDefault : e.default)) || state.manifest.backgrounds.find((e) => e.default);
-      if (def) { state.group = ['always', 'milestone', 'spot'].includes(def.group) ? def.group : 'today'; renderTabs(); selectBackground(def); }
-    }
   }
+  updateHint();
   draw();
 });
 
@@ -332,8 +341,11 @@ $('#photo').addEventListener('change', async (ev) => {
     idbSet('photo', file); saveDraftNow();
     trackOnce('photo_added');
     draw();
-    if (cutoutOn() && !state.bg?.sticker) autoSpot();
-    else if (state.bg?.sticker) requestCutout();
+    if (cutoutOn()) {
+      if (!state.bgChosen && !state.bg?.sticker) autoSpot();
+      requestCutout();
+    }
+    updateHint();
     cueAfterPhoto(); // also scrolls Words into view, below the sticky preview
   } catch { /* unreadable image */ }
 });
@@ -344,13 +356,23 @@ $('#zoom').addEventListener('input', (ev) => {
   draw();
 });
 
-// drag and pinch on the preview
+// drag and pinch on the preview. On a scene, whatever is under the finger moves: the words panel, the
+// footer plate (each up or down, never past the other) or the dog; anywhere else moves the dog too.
 const pointers = new Map();
 let pinchStart = null;
+let dragTarget = 'photo';
 preview.addEventListener('pointerdown', (ev) => {
   if (!state.photo) return;
   preview.setPointerCapture(ev.pointerId);
   pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (pointers.size === 1) {
+    dragTarget = 'photo';
+    if (isScene()) {
+      const r = preview.getBoundingClientRect();
+      const k = MASTER.w / preview.clientWidth;
+      dragTarget = sceneHit(master, words(), photoForRender(), (ev.clientX - r.left) * k, (ev.clientY - r.top) * k) || 'photo';
+    }
+  }
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
     pinchStart = { d: Math.hypot(a.x - b.x, a.y - b.y), scale: state.photo.view.scale };
@@ -361,8 +383,10 @@ preview.addEventListener('pointermove', (ev) => {
   const prev = pointers.get(ev.pointerId);
   const k = MASTER.w / preview.clientWidth;
   if (pointers.size === 1) {
-    state.photo.view.dx += (ev.clientX - prev.x) * k;
-    state.photo.view.dy += (ev.clientY - prev.y) * k;
+    const dx = (ev.clientX - prev.x) * k, dy = (ev.clientY - prev.y) * k;
+    if (dragTarget === 'panel') state.layout.panelDy += dy;
+    else if (dragTarget === 'footer') state.layout.footerDy += dy;
+    else { state.photo.view.dx += dx; state.photo.view.dy += dy; }
   }
   pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
   if (pointers.size === 2 && pinchStart) {
@@ -447,7 +471,7 @@ function fileName(which) {
 }
 async function makeFile(which) {
   await ensureFonts();
-  render(master, { mode: state.mode, name: state.name, line: state.line }, state.bg, state.bgImg, photoForRender());
+  render(master, words(), state.bg, state.bgImg, photoForRender());
   const blob = await cut(master, which);
   return new File([blob], fileName(which), { type: 'image/jpeg' });
 }
@@ -469,7 +493,7 @@ async function sharePicture(which, via, text) {
     try { await navigator.share(data); track('share_tapped', { via, how: 'sheet' }); cueAfterShare(); return true; } catch (e) { if (e?.name === 'AbortError') return false; }
   }
   download(file); track('share_tapped', { via, how: 'download' });
-  $('#share-hint').textContent = `Saved ${file.name}. Open ${via === 'instagram' ? 'Instagram and add it to your story' : via === 'facebook' ? 'Facebook and post it' : 'Messages and send it'} from your phone.`;
+  $('#share-hint').textContent = `Saved ${file.name}. Open ${via === 'instagram' ? 'Instagram and add it to your story' : via === 'facebook' ? 'Facebook and post it' : 'Messages and send it'}.`;
   cueAfterShare();
   return true;
 }
@@ -529,7 +553,7 @@ let draftTimer = 0;
 function saveDraftNow() {
   clearTimeout(draftTimer);
   try {
-    localStorage.setItem(DRAFT_KEY, JSON.stringify({ mode: state.mode, name: state.name, line: state.line, bg: state.bg?.id, view: state.photo?.view || null, t: Date.now() }));
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ mode: state.mode, name: state.name, line: state.line, bg: state.bg?.id, bgChosen: state.bgChosen, layout: state.layout, cutout: cutoutOn(), view: state.photo?.view || null, t: Date.now() }));
   } catch { /* no storage */ }
 }
 function saveDraft() {
@@ -544,8 +568,10 @@ async function restoreDraft() {
   if (d.mode === 'inMemory') { document.querySelector('input[name="mode"][value="inMemory"]').checked = true; state.mode = 'inMemory'; }
   if (d.name) { $('#name').value = d.name; state.name = d.name; }
   if (d.line) { $('#line').value = d.line; state.line = d.line; $('#count').textContent = `${d.line.length} / 120`; }
+  if (d.layout) state.layout = { panelDy: Number(d.layout.panelDy) || 0, footerDy: Number(d.layout.footerDy) || 0 };
+  if (typeof d.cutout === 'boolean') $('#cutout-on').checked = d.cutout;
   const bg = d.bg && state.manifest.backgrounds.find((e) => e.id === d.bg);
-  if (bg) await selectBackground(bg);
+  if (bg) { state.bgChosen = !!d.bgChosen; await selectBackground(bg); }
   const file = await idbGet('photo');
   if (file instanceof Blob) {
     try {
@@ -555,8 +581,9 @@ async function restoreDraft() {
       $('#photo-label').textContent = 'Change photo';
     } catch { /* unreadable */ }
   }
+  updateHint();
   draw();
-  if (state.bg?.sticker && state.photo) requestCutout();
+  if (cutoutOn() && state.photo) requestCutout();
 }
 function clearDraft() { try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } idbDel('photo'); }
 
@@ -689,6 +716,7 @@ $('#post-form').addEventListener('submit', async (ev) => {
     const a = $('#done-url'); a.href = j.url; a.textContent = j.url.replace(/^https?:\/\//, '');
     $('#post-done').hidden = false;
     shareLivePage(j.url);
+    watchForLive(j.id);
     $('#post-done').scrollIntoView({ behavior: 'smooth', block: 'start' });
     clearDraft();
   } catch (e) {
@@ -696,6 +724,29 @@ $('#post-form').addEventListener('submit', async (ev) => {
   } finally { btn.disabled = false; }
 });
 $('#done-again').addEventListener('click', () => { location.href = '/'; });
+// The screener usually answers within seconds. For half a minute after the post, ask whether the page went
+// live, and if so say so instead of "in the queue".
+function watchForLive(id) {
+  const until = Date.now() + 30 * 1000;
+  const tick = async () => {
+    if (Date.now() > until) return;
+    try {
+      const r = await fetch('/api/mine', { cache: 'no-store' });
+      const j = r.ok ? await r.json() : null;
+      const e = j?.entries?.find((x) => x.id === id);
+      if (e?.status === 'live') {
+        $('#done-state').textContent = 'is on the wall.';
+        $('#done-note').textContent = 'The page is live now. Share it with the buttons below, or invite friends by email from the page itself.';
+        $('#done-will').textContent = 'The page is';
+        track('posted_live');
+        return;
+      }
+      if (e && e.status !== 'pending') return;
+    } catch { /* try again */ }
+    setTimeout(tick, 3000);
+  };
+  setTimeout(tick, 2500);
+}
 
 async function initPost() {
   post.config = await fetchConfig();

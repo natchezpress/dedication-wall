@@ -184,54 +184,85 @@ function drawBook(ctx, d, photo) {
   drawTextBlock(ctx, d, TEXT.x, TEXT.w, BOOK.y + BOOK.h / 2);
 }
 
-const SPOT_FOOTER_TOP = 2080;          // plate 2080–2280: inside the 1:1 card (ends 2296), so every cut carries it
-const SPOT_FLOOR = SPOT_FOOTER_TOP - 20; // lowest the dog's feet can go
-const SPOT_PANEL = { x: 164, y: 700, w: MASTER.w - 328, pad: 56 }; // top sits inside the 1:1 card (starts 648); height follows the words
+// ---- the scene layout: the cut-out dog standing on the background, words on a panel above, the footer plate below.
+// The panel and the plate can each be moved up or down by the reader (d.layout.panelDy / footerDy); the order
+// never flips: the panel stays above the plate, and the dog's feet stay between them.
+const SCENE = {
+  panel: { x: 164, y: 700, w: MASTER.w - 328, pad: 56 }, // top sits inside the 1:1 card (starts 648); height follows the words
+  footerTop: 2080,                                       // plate 2080–2280: inside the 1:1 card (ends 2296), so every cut carries it
+  topMin: 60, bottomMax: MASTER.h - 60, gap: 480, dogGap: 20, roomMin: 240, // gap: the band kept for the dog between panel and plate
+};
 
-function drawSpot(ctx, d, sticker) {
-  // the reader's cut-out dog, placed on the photo; words in the open area above with a soft panel
-  const panelH = Math.max(380, measureTextBlock(ctx, d, SPOT_PANEL.w - 120).total + SPOT_PANEL.pad * 2);
+// Everything the scene needs, in master pixels: where the panel, the plate and the dog are.
+export function sceneGeometry(ctx, d, sticker) {
+  const lay = d.layout || {};
+  const panelH = Math.max(380, measureTextBlock(ctx, d, SCENE.panel.w - 120).total + SCENE.panel.pad * 2);
+  const panelY = Math.min(Math.max(SCENE.topMin, SCENE.panel.y + (lay.panelDy || 0)), SCENE.bottomMax - FOOTER.h - SCENE.gap - panelH);
+  const footerMin = panelY + panelH + SCENE.gap;
+  const footerY = Math.min(Math.max(footerMin, SCENE.footerTop + (lay.footerDy || 0)), SCENE.bottomMax - FOOTER.h);
+  const panel = { x: SCENE.panel.x, y: panelY, w: SCENE.panel.w, h: panelH };
+  const footer = { x: 0, y: footerY, w: MASTER.w, h: FOOTER.h };
+  let dog = null;
   if (sticker?.img) {
     const img = sticker.img;
     const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
-    // At scale 1 the dog fits the room between the words panel and the footer, whatever its shape.
-    const room = SPOT_FLOOR - (SPOT_PANEL.y + panelH) - 40;
+    const floor = footerY - SCENE.dogGap;
+    // At scale 1 the dog fits the room between the panel and the plate, whatever its shape.
+    const room = Math.max(SCENE.roomMin, floor - (panelY + panelH) - 40);
     const fitW = Math.min(900, room * iw / ih);
-    const baseW = fitW * (sticker.view?.scale || 1);
-    const h = baseW * ih / iw;
+    const w = fitW * (sticker.view?.scale || 1);
+    const h = w * ih / iw;
     const cx = MASTER.w / 2 + (sticker.view?.dx || 0);
-    // The dog can be moved up and sideways, never down into the footer's band.
-    const bottom = Math.min(SPOT_FLOOR, SPOT_FLOOR + (sticker.view?.dy || 0));
+    // The dog can be moved up and sideways, never down into the plate's band.
+    const bottom = Math.min(floor, floor + (sticker.view?.dy || 0));
+    dog = { x: cx - w / 2, y: bottom - h, w, h, img };
+  }
+  return { panel, footer, dog };
+}
+
+// Which part of the scene is under a master-pixel point: 'panel', 'footer', 'dog' or null.
+export function sceneHit(canvas, d, sticker, x, y) {
+  const g = sceneGeometry(canvas.getContext('2d'), d, sticker);
+  const inside = (r) => r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  if (inside(g.panel)) return 'panel';
+  if (inside(g.footer) && x >= (MASTER.w - 1100) / 2 && x <= (MASTER.w + 1100) / 2) return 'footer';
+  if (inside(g.dog)) return 'dog';
+  return null;
+}
+
+function drawScene(ctx, d, sticker) {
+  const g = sceneGeometry(ctx, d, sticker);
+  if (g.dog) {
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = 30; ctx.shadowOffsetY = 12;
-    ctx.drawImage(img, cx - baseW / 2, bottom - h, baseW, h);
+    ctx.drawImage(g.dog.img, g.dog.x, g.dog.y, g.dog.w, g.dog.h);
     ctx.restore();
   }
-  const panel = { ...SPOT_PANEL, h: panelH };
+  const panel = g.panel;
   ctx.save();
   ctx.fillStyle = 'rgba(247,241,230,0.82)';
   ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 40; ctx.shadowOffsetY = 10;
   roundRect(ctx, panel.x, panel.y, panel.w, panel.h, 18); ctx.fill();
   ctx.restore();
   drawTextBlock(ctx, d, panel.x + 60, panel.w - 120, panel.y + panel.h / 2, 'center');
+  drawFooter(ctx, g.footer.y);
 }
 
 /**
  * Render the master.
  * @param {HTMLCanvasElement} canvas  sized MASTER.w × MASTER.h
- * @param {object} d  {mode, name, line}
+ * @param {object} d  {mode, name, line, layout?: {panelDy, footerDy}}
  * @param {object} bg  manifest entry
  * @param {HTMLImageElement} bgImg
- * @param {object} photo  {img, view}  (book layout) or sticker (spot layout)
+ * @param {object} photo  {img, view} for the book page, or {img, view, sticker: true} for the scene (a cut-out dog)
  */
 export function render(canvas, d, bg, bgImg, photo) {
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, MASTER.w, MASTER.h);
   if (bgImg) drawBackground(ctx, bg, bgImg);
   else { ctx.fillStyle = PAPER; ctx.fillRect(0, 0, MASTER.w, MASTER.h); }
-  if (bg?.sticker) {
-    drawSpot(ctx, d, photo);
-    drawFooter(ctx, SPOT_FOOTER_TOP);
+  if (photo?.sticker) {
+    drawScene(ctx, d, photo);
   } else {
     drawBook(ctx, d, photo);
     drawFooter(ctx, BOOK.y + BOOK.h + 60);
