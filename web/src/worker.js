@@ -315,7 +315,7 @@ function inviteMail(env, e, unsub) {
   const maker = `${site(env)}/?utm_source=invite&utm_medium=email&utm_campaign=ops-57`;
   const magnet = env.MAGNET_URL || 'https://www.brockalston.com';
   const addr = env.POSTAL_ADDRESS || 'Natchez Press LLC, Franklin, Tennessee';
-  const text = `Someone you know made a dedication for their dog, ${dog}, on the Dedication Wall: the kind a novelist writes to the dog who got them through.
+  const text = `Someone you know made a dedication for their dog, ${dog}, on the Dedication Wall: the kind that opens a book, written for a dog.
 
 See ${dog}’s page and leave a heart:
 ${page}
@@ -331,7 +331,7 @@ ${unsub}
 
 ${addr}`;
   const html = `<div style="font-family:Georgia,serif;font-size:17px;line-height:1.5;color:#2b2622">
-<p>Someone you know made a dedication for their dog, <strong>${h(dog)}</strong>, on the Dedication Wall: the kind a novelist writes to the dog who got them through.</p>
+<p>Someone you know made a dedication for their dog, <strong>${h(dog)}</strong>, on the Dedication Wall: the kind that opens a book, written for a dog.</p>
 <p><a href="${page}" style="display:inline-block;background:#1f2a44;color:#fff;text-decoration:none;padding:11px 18px;border-radius:999px">See ${h(dog)}’s page and leave a heart</a></p>
 <p>Make one for your own dog. Free, a minute, on your phone: <a href="${maker}">${h(site(env).replace(/^https?:\/\//, ''))}</a></p>
 <p>Dog people who read: get <em>Riverspook</em>, a free novella from the world of <em>Jetson’s Journey</em>, when you join Brock Alston’s letters: <a href="${magnet}">${h(magnet)}</a></p>
