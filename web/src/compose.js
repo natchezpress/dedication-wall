@@ -181,13 +181,17 @@ function drawBook(ctx, d, photo) {
 
 const SPOT_FOOTER_TOP = 2300;          // pill 2300–2500, inside the feed cut (ends 2502)
 const SPOT_FLOOR = SPOT_FOOTER_TOP - 20; // lowest the dog's feet can go
+const SPOT_PANEL = { x: 164, y: 760, w: MASTER.w - 328, h: 560 };
 
 function drawSpot(ctx, d, sticker) {
   // the reader's cut-out dog, placed on the photo; words in the open area above with a soft panel
   if (sticker?.img) {
     const img = sticker.img;
     const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
-    const baseW = 900 * (sticker.view?.scale || 1);
+    // At scale 1 the dog fits the room between the words panel and the footer, whatever its shape.
+    const room = SPOT_FLOOR - (SPOT_PANEL.y + SPOT_PANEL.h) - 40;
+    const fitW = Math.min(900, room * iw / ih);
+    const baseW = fitW * (sticker.view?.scale || 1);
     const h = baseW * ih / iw;
     const cx = MASTER.w / 2 + (sticker.view?.dx || 0);
     // The dog can be moved up and sideways, never down into the footer's band.
@@ -197,7 +201,7 @@ function drawSpot(ctx, d, sticker) {
     ctx.drawImage(img, cx - baseW / 2, bottom - h, baseW, h);
     ctx.restore();
   }
-  const panel = { x: 164, y: 760, w: MASTER.w - 328, h: 560 };
+  const panel = SPOT_PANEL;
   ctx.save();
   ctx.fillStyle = 'rgba(247,241,230,0.82)';
   ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 40; ctx.shadowOffsetY = 10;
