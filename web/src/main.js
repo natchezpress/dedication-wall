@@ -163,12 +163,11 @@ function nudge(key, el, stepNo, stepName) {
 // A gentle scroll, only when no keyboard can be up (after the photo, after the background).
 function settle(el) {
   if (!el || document.activeElement?.matches?.('input, textarea')) return;
-  // The preview is sticky at the top on phones; land the step just under it. On wider screens it
-  // sits beside the steps, so the step can come to the top.
+  // Land the step near the top of the screen. (If the preview is ever made sticky again on phones,
+  // pad by its height here so the step lands under it.)
   const wrap = document.querySelector('.preview-wrap');
-  const beside = window.matchMedia('(min-width: 720px)').matches;
-  const sticky = !beside && wrap && getComputedStyle(wrap).position === 'sticky' ? wrap.offsetHeight + 8 : 16;
-  el.style.scrollMarginTop = `${sticky}px`;
+  const stuck = wrap && getComputedStyle(wrap).position === 'sticky' && !window.matchMedia('(min-width: 720px)').matches;
+  el.style.scrollMarginTop = `${stuck ? wrap.offsetHeight + 8 : 16}px`;
   try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch { /* old browser */ }
 }
 function spotsTab() { return [...document.querySelectorAll('#groups button')].find((b) => b.textContent === 'Jetson’s Spots'); }
@@ -346,7 +345,7 @@ $('#photo').addEventListener('change', async (ev) => {
       requestCutout();
     }
     updateHint();
-    cueAfterPhoto(); // also scrolls Words into view, below the sticky preview
+    cueAfterPhoto(); // also scrolls Words into view
   } catch { /* unreadable image */ }
 });
 
