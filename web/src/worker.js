@@ -636,6 +636,15 @@ async function admin(env, request, url) {
     const { results } = await env.DB.prepare('SELECT * FROM requests ORDER BY created_at DESC LIMIT 200').all();
     return json({ ok: true, requests: results });
   }
+  if (p === 'requests' && request.method === 'POST') {
+    // Close (or reopen) a background request from the admin page.
+    const b = await request.json().catch(() => ({}));
+    const id = String(b.id || ''), to = String(b.status || '');
+    if (!['new', 'done'].includes(to)) return bad('status must be new or done');
+    const r = await env.DB.prepare('UPDATE requests SET status = ? WHERE id = ?').bind(to, id).run();
+    if (!r.meta.changes) return bad('not found', 404);
+    return json({ ok: true, id, status: to });
+  }
   if (p === 'notices' && request.method === 'GET') {
     const { results } = await env.DB.prepare('SELECT * FROM notices ORDER BY sent_at DESC LIMIT 100').all();
     return json({ ok: true, notices: results });
@@ -675,9 +684,10 @@ ${queue.length ? queue.map((e) => `<div class="dotd" style="grid-template-column
 <p><button class="btn" type="submit">Save</button> <span class="small" id="saved"></span></p>
 </form>
 <h2>Background requests (${reqs.length} open)</h2>
-${reqs.length ? `<ul class="small">${reqs.map((r) => `<li>${h(centralDateTime(r.created_at))} · <em>${h(r.text)}</em>${r.email ? ` · <a href="mailto:${h(r.email)}?subject=Your%20background%20request">${h(r.email)}</a>` : ''}</li>`).join('')}</ul>` : '<p class="small">None open.</p>'}
+${reqs.length ? `<ul class="small">${reqs.map((r) => `<li>${h(centralDateTime(r.created_at))} · <em>${h(r.text)}</em>${r.email ? ` · <a href="mailto:${h(r.email)}?subject=Your%20background%20request">${h(r.email)}</a>` : ''} · <button class="btn quiet" style="padding:4px 10px;font-size:13px" onclick="closeRequest('${h(r.id)}')">Done</button></li>`).join('')}</ul>` : '<p class="small">None open.</p>'}
 <p class="small">Entries: ${counts.map((c) => `${h(c.status)} ${c.n}`).join(' · ') || 'none'}. Posting on the live site: <strong>${postingOn(env) ? 'ON' : 'OFF'}</strong> (a deploy variable, not a switch here).</p>
 <script>
+async function closeRequest(id){ const r = await fetch('/api/admin/requests',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status:'done'})}); if((await r.json()).ok) location.reload(); }
 async function decide(id, status){ const r = await fetch('/api/admin/decide',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status})}); if((await r.json()).ok) location.reload(); }
 async function saveSettings(ev){ ev.preventDefault(); const f=ev.target; const b={}; for(const el of f.elements){ if(!el.name) continue; b[el.name]= el.type==='checkbox'? String(el.checked) : el.value; } const r=await fetch('/api/admin/settings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}); document.getElementById('saved').textContent=(await r.json()).ok?'Saved.':'Failed.'; return false; }
 </script>`;
