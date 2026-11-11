@@ -39,6 +39,7 @@ export default {
       if (p === '/api/cutout' && request.method === 'POST') return cutout(env, request, ctx);
       if (p === '/api/auth/link' && request.method === 'POST') return authLink(env, request, url);
       if (p === '/api/auth/verify' && request.method === 'GET') return authVerify(env, request, url);
+      if (p === '/api/auth/code' && request.method === 'POST') return authCode(env, request, url);
       if (p === '/api/auth/logout') return new Response(null, { status: 302, headers: { location: '/', 'set-cookie': 'dw_session=; Path=/; Max-Age=0' } });
       if (p === '/api/post' && request.method === 'POST') return post(env, request, ctx);
       if (p === '/api/mine' && request.method === 'GET') return mine(env, request);
@@ -153,20 +154,49 @@ async function authLink(env, request, url) {
   if ((mine?.n || 0) >= 20) { await sense(env, 'cap', 'sign-in links: twenty from one visitor today', { visitor: vh }); return bad('too many sign-in links from here today', 429); }
   await env.DB.prepare('INSERT INTO link_uses (visitor, day, n) VALUES (?,?,1) ON CONFLICT(visitor, day) DO UPDATE SET n = n + 1').bind(vh, day).run();
   const token = tokenHex(24);
+  const code = signinCode();
   const exp = t + 15 * 60;
-  await env.DB.prepare(`INSERT INTO owners (email, magic_token, token_expires, created_at, last_seen_at, link_sent_at, links_day, links_n) VALUES (?,?,?,?,?,?,?,1)
-    ON CONFLICT(email) DO UPDATE SET magic_token = excluded.magic_token, token_expires = excluded.token_expires,
+  await env.DB.prepare(`INSERT INTO owners (email, magic_token, magic_code, code_tries, token_expires, created_at, last_seen_at, link_sent_at, links_day, links_n) VALUES (?,?,?,0,?,?,?,?,?,1)
+    ON CONFLICT(email) DO UPDATE SET magic_token = excluded.magic_token, magic_code = excluded.magic_code, code_tries = 0, token_expires = excluded.token_expires,
       link_sent_at = excluded.link_sent_at, links_n = CASE WHEN owners.links_day = excluded.links_day THEN owners.links_n + 1 ELSE 1 END, links_day = excluded.links_day`)
-    .bind(email, await sha256(token), exp, t, t, t, day).run();
+    .bind(email, await sha256(token), await codeHash(env, email, code), exp, t, t, t, day).run();
   const next = typeof body.next === 'string' && body.next.startsWith('/') ? body.next : '/';
   const link = `${site(env)}/api/auth/verify?token=${token}&email=${encodeURIComponent(email)}&next=${encodeURIComponent(next)}`;
+  // The code rides in the subject too, so it shows in the phone's notification without opening the email.
   const r = await sendMail(env, {
     to: email, kind: 'signin',
-    subject: 'Your sign-in link for the Dedication Wall',
-    text: `Tap to sign in (good for 15 minutes):\n${link}\n\nIf you didn’t ask for this, ignore it.`,
-    html: `<p>Tap to sign in (good for 15 minutes):</p><p><a href="${link}">${link}</a></p><p>If you didn’t ask for this, ignore it.</p>`,
+    subject: `Your sign-in link for the Dedication Wall (code ${code})`,
+    text: `Tap to sign in (good for 15 minutes):\n${link}\n\nOr type this code on the page where you asked for it:\n${code}\n\nIf you didn’t ask for this, ignore it.`,
+    html: `<p>Tap to sign in (good for 15 minutes):</p><p><a href="${link}">${link}</a></p><p>Or type this code on the page where you asked for it:</p><p style="font-size:28px;letter-spacing:0.18em;font-weight:600;margin:6px 0 18px">${code}</p><p>If you didn’t ask for this, ignore it.</p>`,
   });
-  return json({ ok: true, sent: r.status === 'sent', ...(devMode(env) && r.status !== 'sent' ? { dev_link: link } : {}) });
+  return json({ ok: true, sent: r.status === 'sent', ...(devMode(env) && r.status !== 'sent' ? { dev_link: link, dev_code: code } : {}) });
+}
+
+// Six digits, every value equally likely (bytes past the last whole million are drawn again).
+function signinCode() {
+  for (;;) {
+    const n = crypto.getRandomValues(new Uint32Array(1))[0];
+    if (n < 4294000000) return String(n % 1000000).padStart(6, '0');
+  }
+}
+const codeHash = (env, email, code) => sha256(`${secret(env)}|code|${email}|${code}`);
+
+// The code is the link's twin: same 15 minutes, spent together, five wrong tries and it is gone.
+async function authCode(env, request, url) {
+  const body = await request.json().catch(() => ({}));
+  const email = String(body.email || '').trim().toLowerCase();
+  const code = String(body.code || '').replace(/\D/g, '');
+  if (!validEmail(email) || code.length !== 6) return bad('type the six digits from the email');
+  const row = await env.DB.prepare('SELECT magic_code, code_tries, token_expires FROM owners WHERE email = ?').bind(email).first();
+  if (!row || !row.magic_code || !row.token_expires || row.token_expires < now()) return bad('that code has expired; send a new one', 400);
+  if ((row.code_tries || 0) >= 5) return bad('too many tries; send a new one', 429);
+  if (row.magic_code !== (await codeHash(env, email, code))) {
+    await env.DB.prepare('UPDATE owners SET code_tries = code_tries + 1 WHERE email = ?').bind(email).run();
+    return bad((row.code_tries || 0) + 1 >= 5 ? 'too many tries; send a new one' : 'that code doesn’t match; check the newest email', 400);
+  }
+  await env.DB.prepare('UPDATE owners SET magic_token = NULL, magic_code = NULL, code_tries = 0, token_expires = NULL, last_seen_at = ? WHERE email = ?').bind(now(), email).run();
+  const cookie = sessionCookie(await makeSession(secret(env), email), url.protocol === 'https:');
+  return json({ ok: true, email }, 200, { 'set-cookie': cookie });
 }
 
 async function authVerify(env, request, url) {
@@ -177,7 +207,7 @@ async function authVerify(env, request, url) {
   if (!row || !row.magic_token || row.token_expires < now() || row.magic_token !== (await sha256(token))) {
     return html(simplePage({ title: 'That link has expired', bodyHtml: '<p>Sign-in links last 15 minutes. <a href="/#step-post">Go back and ask for a new one.</a> Your dedication is still there.</p>', noindex: true }), 400);
   }
-  await env.DB.prepare('UPDATE owners SET magic_token = NULL, token_expires = NULL, last_seen_at = ? WHERE email = ?').bind(now(), email).run();
+  await env.DB.prepare('UPDATE owners SET magic_token = NULL, magic_code = NULL, code_tries = 0, token_expires = NULL, last_seen_at = ? WHERE email = ?').bind(now(), email).run();
   const cookie = sessionCookie(await makeSession(secret(env), email), url.protocol === 'https:');
   return new Response(null, { status: 302, headers: { location: next.startsWith('/') ? next : '/', 'set-cookie': cookie } });
 }
@@ -301,10 +331,11 @@ async function notifyLive(env, e) {
   const inviteUrl = `${site(env)}/i/${e.invite_code}?utm_source=share&utm_medium=referral&utm_campaign=ops-57`;
   const inviteForm = `${page}?k=${await inviteKey(env, e.id)}`;
   const removeUrl = `${site(env)}/api/remove?id=${e.id}&key=${await sha256(`${secret(env)}|remove|${e.id}`)}`;
+  const homeUrl = `${site(env)}/?utm_source=live-email&utm_medium=email&utm_campaign=ops-57`;
   await sendMail(env, { to: e.owner_email, kind: 'live', entry_id: e.id,
     subject: `${e.dog_name} is on the wall`,
-    text: `${e.dog_name}’s dedication is live:\n${page}\n\nShare this link so friends can see it and leave a heart:\n${inviteUrl}\n\nInvite up to five friends by email (we send one short note and keep no addresses):\n${inviteForm}\n\nTo take it down at any time:\n${removeUrl}`,
-    html: `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>` });
+    text: `${e.dog_name}’s dedication is live:\n${page}\n\nShare this link so friends can see it and leave a heart:\n${inviteUrl}\n\nInvite up to five friends by email (we send one short note and keep no addresses):\n${inviteForm}\n\nKeep the wall on your phone. Add it to your home screen so you can easily come back and visit the Dedication Wall, and see who’s new. Open ${site(env)} on your phone, then:\niPhone: tap Share, then Add to Home Screen.\nAndroid: tap ⋮, then Add to Home screen.\n\nTo take it down at any time:\n${removeUrl}`,
+    html: `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p><strong>Keep the wall on your phone.</strong> Add it to your home screen so you can easily come back and visit the Dedication Wall, and see who’s new. <a href="${homeUrl}">Open the wall on your phone</a>, then:<br><strong>iPhone:</strong> tap Share, then Add to Home Screen.<br><strong>Android:</strong> tap ⋮, then Add to Home screen.</p><p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>` });
 }
 
 // ---------------------------------------------------------------- email invites
