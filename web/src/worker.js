@@ -606,7 +606,7 @@ async function admin(env, request, url) {
   if (p === 'decide' && request.method === 'POST') {
     const b = await request.json().catch(() => ({}));
     const id = String(b.id || ''), to = String(b.status || '');
-    if (!['live', 'rejected', 'hidden'].includes(to)) return bad('status must be live, rejected or hidden');
+    if (!['live', 'rejected', 'hidden', 'removed'].includes(to)) return bad('status must be live, rejected, hidden or removed');
     const e = await env.DB.prepare('SELECT * FROM entries WHERE id = ?').bind(id).first();
     if (!e) return bad('not found', 404);
     const t = now();
@@ -615,6 +615,12 @@ async function admin(env, request, url) {
       if (!e.live_at) await notifyLive(env, { ...e, live_at: t });
     } else if (to === 'rejected') {
       await rejectEntry(env, e);
+    } else if (to === 'removed') {
+      // An admin take-down: off the wall and photos deleted, like the owner's own link; no email.
+      if (e.status !== 'removed') {
+        await env.DB.prepare('UPDATE entries SET status = \'removed\', removed_at = ? WHERE id = ?').bind(t, id).run();
+        await deletePhotos(env, e);
+      }
     } else {
       await env.DB.prepare('UPDATE entries SET status = ? WHERE id = ?').bind(to, id).run();
     }
@@ -672,10 +678,13 @@ async function adminPage(env, request, url) {
   const s = await settings(env);
   const { results: queue } = await env.DB.prepare('SELECT id, dog_name, line, mode, owner_email, screen_result, created_at, is_test FROM entries WHERE status = \'pending\' ORDER BY created_at ASC LIMIT 50').all();
   const { results: reqs } = await env.DB.prepare('SELECT id, text, email, created_at FROM requests WHERE status = \'new\' ORDER BY created_at DESC LIMIT 50').all();
+  const { results: liveRows } = await env.DB.prepare('SELECT id, dog_name, line, owner_email, hearts, live_at, is_test FROM entries WHERE status = \'live\' ORDER BY live_at DESC LIMIT 50').all();
   const { results: counts } = await env.DB.prepare('SELECT status, COUNT(*) AS n FROM entries GROUP BY status').all();
   const body = `
 <h2>Queue (${queue.length})</h2>
 ${queue.length ? queue.map((e) => `<div class="dotd" style="grid-template-columns:120px 1fr"><img src="/p/${h(e.id)}/card.jpg" onerror="this.style.visibility='hidden'" alt="" /><div><strong>${h(e.dog_name)}</strong> · ${e.mode === 'in_memory' ? 'In memory' : 'To'} · ${h(e.owner_email)}${e.is_test ? ' · TEST' : ''}<br><em>${h(e.line)}</em><br><span class="small">${h(e.screen_result || 'not screened yet')}</span><div class="row"><button class="btn" onclick="decide('${h(e.id)}','live')">Publish</button><button class="btn quiet" onclick="decide('${h(e.id)}','rejected')">Reject</button></div></div></div>`).join('') : '<p class="small">Nothing waiting.</p>'}
+<h2>On the wall (${liveRows.length})</h2>
+${liveRows.length ? `<ul class="small">${liveRows.map((e) => `<li><a href="/d/${h(e.id)}">${h(e.dog_name)}</a> · <em>${h(e.line)}</em> · ${h(e.owner_email)} · ♥ ${e.hearts} · ${h(centralDateTime(e.live_at))}${e.is_test ? ' · TEST' : ''} · <button class="btn quiet" style="padding:4px 10px;font-size:13px" onclick="takeDown('${h(e.id)}','${h(e.dog_name).replace(/'/g, '&#39;')}')">Take down</button></li>`).join('')}</ul>` : '<p class="small">Nothing live.</p>'}
 <h2>Switches</h2>
 <form onsubmit="return saveSettings(event)">
 <p><label>Dog of the day (entry id, blank = automatic) <input name="dog_of_the_day" value="${h(s.dogOfTheDay)}" size="10"/></label></p>
@@ -687,6 +696,7 @@ ${queue.length ? queue.map((e) => `<div class="dotd" style="grid-template-column
 ${reqs.length ? `<ul class="small">${reqs.map((r) => `<li>${h(centralDateTime(r.created_at))} · <em>${h(r.text)}</em>${r.email ? ` · <a href="mailto:${h(r.email)}?subject=Your%20background%20request">${h(r.email)}</a>` : ''} · <button class="btn quiet" style="padding:4px 10px;font-size:13px" onclick="closeRequest('${h(r.id)}')">Done</button></li>`).join('')}</ul>` : '<p class="small">None open.</p>'}
 <p class="small">Entries: ${counts.map((c) => `${h(c.status)} ${c.n}`).join(' · ') || 'none'}. Posting on the live site: <strong>${postingOn(env) ? 'ON' : 'OFF'}</strong> (a deploy variable, not a switch here).</p>
 <script>
+async function takeDown(id, name){ if(!window.confirm('Take ' + name + ' off the wall and delete the photos? This cannot be undone.')) return; await decide(id, 'removed'); }
 async function closeRequest(id){ const r = await fetch('/api/admin/requests',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status:'done'})}); if((await r.json()).ok) location.reload(); }
 async function decide(id, status){ const r = await fetch('/api/admin/decide',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status})}); if((await r.json()).ok) location.reload(); }
 async function saveSettings(ev){ ev.preventDefault(); const f=ev.target; const b={}; for(const el of f.elements){ if(!el.name) continue; b[el.name]= el.type==='checkbox'? String(el.checked) : el.value; } const r=await fetch('/api/admin/settings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}); document.getElementById('saved').textContent=(await r.json()).ok?'Saved.':'Failed.'; return false; }
