@@ -165,9 +165,9 @@ async function authLink(env, request, url) {
   // The code rides in the subject too, so it shows in the phone's notification without opening the email.
   const r = await sendMail(env, {
     to: email, kind: 'signin',
-    subject: `Your sign-in link for the Dedication Wall (code ${code})`,
-    text: `Tap to sign in (good for 15 minutes):\n${link}\n\nOr type this code on the page where you asked for it:\n${code}\n\nIf you didn’t ask for this, ignore it.`,
-    html: `<p>Tap to sign in (good for 15 minutes):</p><p><a href="${link}">${link}</a></p><p>Or type this code on the page where you asked for it:</p><p style="font-size:28px;letter-spacing:0.18em;font-weight:600;margin:6px 0 18px">${code}</p><p>If you didn’t ask for this, ignore it.</p>`,
+    subject: `Your sign-in code for the Dedication Wall: ${code} (sign-in link inside)`,
+    text: `Your sign-in code (good for 15 minutes):\n${code}\n\nType it on the page where you made your dedication.\n\nOr tap this link on the same phone, in the same browser:\n${link}\n\nIf you didn’t ask for this, ignore it.`,
+    html: `<p>Your sign-in code (good for 15 minutes):</p><p style="font-size:28px;letter-spacing:0.18em;font-weight:600;margin:6px 0 10px">${code}</p><p>Type it on the page where you made your dedication.</p><p style="color:#6f665d;font-size:13px">Or tap this link on the same phone, in the same browser: <a href="${link}">sign in</a>.</p><p style="color:#6f665d;font-size:13px">If you didn’t ask for this, ignore it.</p>`,
   });
   return json({ ok: true, sent: r.status === 'sent', ...(devMode(env) && r.status !== 'sent' ? { dev_link: link, dev_code: code } : {}) });
 }
@@ -823,11 +823,18 @@ async function adminPage(env, request, url) {
   const { results: liveRows } = await env.DB.prepare('SELECT id, dog_name, line, owner_email, hearts, live_at, is_test FROM entries WHERE status = \'live\' ORDER BY live_at DESC LIMIT 50').all();
   const { results: counts } = await env.DB.prepare('SELECT status, COUNT(*) AS n FROM entries GROUP BY status').all();
   const { results: fails } = await env.DB.prepare('SELECT at, kind, detail, ua FROM failures WHERE at > ? ORDER BY at DESC LIMIT 20').bind(now() - 86400).all();
+  // Asked for a sign-in in the last week and never posted (11/11: a friend asked whether she “did it right”
+  // and nothing showed where she stopped). Signed in = the newest link or code was used.
+  const { results: stalled } = await env.DB.prepare(`SELECT o.email, o.link_sent_at, o.links_n, o.magic_token IS NULL AS signed_in FROM owners o
+    WHERE o.link_sent_at > ? AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.owner_email = o.email AND e.created_at >= o.link_sent_at - 3600)
+    ORDER BY o.link_sent_at DESC LIMIT 30`).bind(now() - 7 * 86400).all();
   const body = `
 <h2>Queue (${queue.length})</h2>
 ${queue.length ? queue.map((e) => `<div class="dotd" style="grid-template-columns:120px 1fr"><img src="/p/${h(e.id)}/card.jpg" onerror="this.style.visibility='hidden'" alt="" /><div><strong>${h(e.dog_name)}</strong> · ${e.mode === 'in_memory' ? 'In memory' : 'To'} · ${h(e.owner_email)}${e.is_test ? ' · TEST' : ''}<br><em>${h(e.line)}</em><br><span class="small">${h(e.screen_result || 'not screened yet')}</span><div class="row"><button class="btn" onclick="decide('${h(e.id)}','live')">Publish</button><button class="btn quiet" onclick="decide('${h(e.id)}','rejected')">Reject</button><a class="btn quiet" href="/?fix=${h(e.id)}">Fix pictures</a></div></div></div>`).join('') : '<p class="small">Nothing waiting.</p>'}
 <h2>On the wall (${liveRows.length})</h2>
 ${liveRows.length ? `<ul class="small">${liveRows.map((e) => `<li><a href="/d/${h(e.id)}">${h(e.dog_name)}</a> · <em>${h(e.line)}</em> · ${h(e.owner_email)} · ♥ ${e.hearts} · ${h(centralDateTime(e.live_at))}${e.is_test ? ' · TEST' : ''} · <a class="btn quiet" style="padding:4px 10px;font-size:13px" href="/?fix=${h(e.id)}">Fix pictures</a> · <button class="btn quiet" style="padding:4px 10px;font-size:13px" onclick="takeDown('${h(e.id)}','${h(e.dog_name).replace(/'/g, '&#39;')}')">Take down</button></li>`).join('')}</ul>` : '<p class="small">Nothing live.</p>'}
+<h2>Started but didn’t post (${stalled.length})</h2>
+${stalled.length ? `<ul class="small">${stalled.map((o) => `<li><a href="mailto:${h(o.email)}">${h(o.email)}</a> · asked to sign in ${h(centralDateTime(o.link_sent_at))}${o.links_n > 1 ? ` (${o.links_n} emails that day)` : ''} · ${o.signed_in ? '<strong>signed in</strong>, then stopped' : 'never used the link or code'}</li>`).join('')}</ul>` : '<p class="small">Nobody this week.</p>'}
 <h2>Switches</h2>
 <form onsubmit="return saveSettings(event)">
 <p><label>Dog of the day (entry id, blank = automatic) <input name="dog_of_the_day" value="${h(s.dogOfTheDay)}" size="10"/></label></p>
