@@ -6,7 +6,7 @@ import {
   json, html, bad, escapeHtml as h, validEmail, visitorHash, sendMail, screen, suggestLines,
   failure, alertIfNeeded, sense, FAILURE_LABEL, anthropic,
 } from './lib.js';
-import { wallPage, dogPage, simplePage, notFoundPage } from './pages.js';
+import { wallPage, dogPage, simplePage, notFoundPage, picV } from './pages.js';
 
 const TERMS_VERSION_FALLBACK = 'terms-of-use-2026-05-16';
 const MAX_PHOTO = 12 * 1024 * 1024;   // original
@@ -92,8 +92,8 @@ const unsubSig = async (env, hash) => (await sha256(`${secret(env)}|unsub|${hash
 
 // The latest dogs on the wall, for the strip under Jetson's card. Public, cached a minute.
 async function recent(env) {
-  const { results } = await env.DB.prepare('SELECT id, dog_name, hearts FROM entries WHERE status = \'live\' AND is_test = 0 ORDER BY live_at DESC LIMIT 6').all();
-  return json({ ok: true, entries: results }, 200, { 'cache-control': 'public, max-age=60' });
+  const { results } = await env.DB.prepare('SELECT id, dog_name, hearts, card_key FROM entries WHERE status = \'live\' AND is_test = 0 ORDER BY live_at DESC LIMIT 6').all();
+  return json({ ok: true, entries: results.map(({ card_key, ...e }) => ({ ...e, v: picV(card_key) })) }, 200, { 'cache-control': 'public, max-age=60' });
 }
 
 // ---------------------------------------------------------------- search engines
@@ -480,10 +480,10 @@ async function remove(env, request) {
 async function wall(env, request, memory) {
   const s = await settings(env);
   const mode = memory ? 'in_memory' : 'for';
-  const { results } = await env.DB.prepare('SELECT id, dog_name, line, hearts FROM entries WHERE status = \'live\' AND mode = ? AND is_test = 0 ORDER BY live_at DESC LIMIT 200').bind(mode).all();
+  const { results } = await env.DB.prepare('SELECT id, dog_name, line, hearts, card_key FROM entries WHERE status = \'live\' AND mode = ? AND is_test = 0 ORDER BY live_at DESC LIMIT 200').bind(mode).all();
   let dotd = null;
   if (!memory) {
-    dotd = s.dogOfTheDay ? await env.DB.prepare('SELECT id, dog_name, line FROM entries WHERE id = ? AND status = \'live\'').bind(s.dogOfTheDay).first() : null;
+    dotd = s.dogOfTheDay ? await env.DB.prepare('SELECT id, dog_name, line, card_key FROM entries WHERE id = ? AND status = \'live\'').bind(s.dogOfTheDay).first() : null;
     if (!dotd && results.length) {
       // deterministic daily pick: the day's hash picks a live entry
       const idx = parseInt((await sha256(centralDay())).slice(0, 8), 16) % results.length;
@@ -683,9 +683,46 @@ async function adminAuth(env, request, url) {
   return !!(m && m[1] === (await sha256(`${tok}|admin`)));
 }
 
+// Fixing a post's pictures from /admin: the maker reopens the post (/?fix=<id>) with the owner's own photo,
+// words and background; the admin moves things and the three new cuts replace the old ones. The words stay
+// the owner's (only the pictures change). New files get new names (…-v<time>.jpg), so pages and browsers
+// that cached the old pictures ask for the new ones; the old files are deleted once the new ones are in.
+async function adminFix(env, request, id, part) {
+  const e = await env.DB.prepare('SELECT id, dog_name, line, mode, background_id, photo_key, story_key, feed_key, card_key, status FROM entries WHERE id = ?').bind(id).first();
+  if (!e || e.status === 'removed') return bad('no such entry', 404);
+  if (!part && request.method === 'GET') {
+    return json({ ok: true, entry: { id: e.id, dog_name: e.dog_name, line: e.line, mode: e.mode, background_id: e.background_id, status: e.status } }, 200, { 'cache-control': 'no-store' });
+  }
+  if (part === 'original' && request.method === 'GET') {
+    const obj = await env.PHOTOS.get(e.photo_key);
+    if (!obj) return bad('the original photo is missing', 404);
+    return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata?.contentType || 'image/jpeg', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' } });
+  }
+  if (part === 'pictures' && request.method === 'POST') {
+    const form = await request.formData().catch(() => null);
+    if (!form) return bad('expected multipart form data');
+    const files = {};
+    for (const k of ['story', 'feed', 'card']) {
+      const f = form.get(k);
+      if (!(f instanceof File) || f.type !== 'image/jpeg') return bad(`missing JPEG: ${k}`);
+      if (f.size > MAX_CUT) return bad(`${k} is too large`);
+      files[k] = f;
+    }
+    const v = now();
+    const keys = { story: `entries/${id}/story-v${v}.jpg`, feed: `entries/${id}/feed-v${v}.jpg`, card: `entries/${id}/card-v${v}.jpg` };
+    await Promise.all(Object.entries(keys).map(([k, key]) => env.PHOTOS.put(key, files[k].stream(), { httpMetadata: { contentType: 'image/jpeg' } })));
+    await env.DB.prepare('UPDATE entries SET story_key = ?, feed_key = ?, card_key = ? WHERE id = ?').bind(keys.story, keys.feed, keys.card, id).run();
+    try { await env.PHOTOS.delete([e.story_key, e.feed_key, e.card_key].filter(Boolean)); } catch { /* old files linger; harmless */ }
+    return json({ ok: true, url: `${site(env)}/d/${id}`, v });
+  }
+  return bad('not found', 404);
+}
+
 async function admin(env, request, url) {
   if (!(await adminAuth(env, request, url))) return bad('admin token needed', 401);
   const p = url.pathname.replace(/^\/api\/admin\/?/, '');
+  const fix = /^entry\/([a-z0-9]+)(?:\/(original|pictures))?$/.exec(p);
+  if (fix) return adminFix(env, request, fix[1], fix[2]);
   if (p === 'queue' && request.method === 'GET') {
     const { results } = await env.DB.prepare('SELECT id, dog_name, line, mode, owner_email, status, screen_result, created_at, is_test FROM entries WHERE status = \'pending\' ORDER BY created_at ASC LIMIT 100').all();
     return json({ ok: true, entries: results });
@@ -786,9 +823,9 @@ async function adminPage(env, request, url) {
   const { results: fails } = await env.DB.prepare('SELECT at, kind, detail, ua FROM failures WHERE at > ? ORDER BY at DESC LIMIT 20').bind(now() - 86400).all();
   const body = `
 <h2>Queue (${queue.length})</h2>
-${queue.length ? queue.map((e) => `<div class="dotd" style="grid-template-columns:120px 1fr"><img src="/p/${h(e.id)}/card.jpg" onerror="this.style.visibility='hidden'" alt="" /><div><strong>${h(e.dog_name)}</strong> · ${e.mode === 'in_memory' ? 'In memory' : 'To'} · ${h(e.owner_email)}${e.is_test ? ' · TEST' : ''}<br><em>${h(e.line)}</em><br><span class="small">${h(e.screen_result || 'not screened yet')}</span><div class="row"><button class="btn" onclick="decide('${h(e.id)}','live')">Publish</button><button class="btn quiet" onclick="decide('${h(e.id)}','rejected')">Reject</button></div></div></div>`).join('') : '<p class="small">Nothing waiting.</p>'}
+${queue.length ? queue.map((e) => `<div class="dotd" style="grid-template-columns:120px 1fr"><img src="/p/${h(e.id)}/card.jpg" onerror="this.style.visibility='hidden'" alt="" /><div><strong>${h(e.dog_name)}</strong> · ${e.mode === 'in_memory' ? 'In memory' : 'To'} · ${h(e.owner_email)}${e.is_test ? ' · TEST' : ''}<br><em>${h(e.line)}</em><br><span class="small">${h(e.screen_result || 'not screened yet')}</span><div class="row"><button class="btn" onclick="decide('${h(e.id)}','live')">Publish</button><button class="btn quiet" onclick="decide('${h(e.id)}','rejected')">Reject</button><a class="btn quiet" href="/?fix=${h(e.id)}">Fix pictures</a></div></div></div>`).join('') : '<p class="small">Nothing waiting.</p>'}
 <h2>On the wall (${liveRows.length})</h2>
-${liveRows.length ? `<ul class="small">${liveRows.map((e) => `<li><a href="/d/${h(e.id)}">${h(e.dog_name)}</a> · <em>${h(e.line)}</em> · ${h(e.owner_email)} · ♥ ${e.hearts} · ${h(centralDateTime(e.live_at))}${e.is_test ? ' · TEST' : ''} · <button class="btn quiet" style="padding:4px 10px;font-size:13px" onclick="takeDown('${h(e.id)}','${h(e.dog_name).replace(/'/g, '&#39;')}')">Take down</button></li>`).join('')}</ul>` : '<p class="small">Nothing live.</p>'}
+${liveRows.length ? `<ul class="small">${liveRows.map((e) => `<li><a href="/d/${h(e.id)}">${h(e.dog_name)}</a> · <em>${h(e.line)}</em> · ${h(e.owner_email)} · ♥ ${e.hearts} · ${h(centralDateTime(e.live_at))}${e.is_test ? ' · TEST' : ''} · <a class="btn quiet" style="padding:4px 10px;font-size:13px" href="/?fix=${h(e.id)}">Fix pictures</a> · <button class="btn quiet" style="padding:4px 10px;font-size:13px" onclick="takeDown('${h(e.id)}','${h(e.dog_name).replace(/'/g, '&#39;')}')">Take down</button></li>`).join('')}</ul>` : '<p class="small">Nothing live.</p>'}
 <h2>Switches</h2>
 <form onsubmit="return saveSettings(event)">
 <p><label>Dog of the day (entry id, blank = automatic) <input name="dog_of_the_day" value="${h(s.dogOfTheDay)}" size="10"/></label></p>
