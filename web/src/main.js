@@ -502,7 +502,15 @@ async function sharePicture(which, via, text) {
   return true;
 }
 const pageText = () => `${state.mode === 'inMemory' ? 'In memory of' : 'To'} ${state.name.trim() || 'my dog'}: ${state.line.trim()}`;
-$('#share-instagram').addEventListener('click', () => sharePicture('story', 'instagram', post.url ? `${pageText()} ${post.url}` : `${FOOTER()} ${makerLink()}`));
+$('#share-instagram').addEventListener('click', () => {
+  $('#share-note').hidden = false; // Instagram only takes a picture through the phone's share sheet
+  sharePicture('story', 'instagram', post.url ? `${pageText()} ${post.url}` : `${FOOTER()} ${makerLink()}`);
+});
+$('#share-x').addEventListener('click', () => {
+  const url = post.url || makerLink();
+  window.open(`https://x.com/intent/post?text=${encodeURIComponent(post.url ? pageText() : FOOTER())}&url=${encodeURIComponent(url)}`, '_blank', 'noopener');
+  track('share_tapped', { via: 'x', how: 'link' });
+});
 $('#share-facebook').addEventListener('click', () => {
   if (post.url) { window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(post.url)}`, '_blank', 'noopener'); track('share_tapped', { via: 'facebook', how: 'link' }); return; }
   sharePicture('feed', 'facebook', `${FOOTER()} ${makerLink()}`);
@@ -532,7 +540,7 @@ function shareLivePage(url) {
   showShareRow();
   $('#share-label').textContent = `Share ${state.name.trim() || 'your dog'}’s page:`;
   $('#share-copy').hidden = false;
-  $('#share-hint').textContent = 'Facebook and Messages carry the link to the page; Instagram gets the story picture.';
+  $('#share-hint').textContent = 'Facebook, X and Messages carry the link to the page; Instagram gets the story picture.';
   setTimeout(() => nudge('share-live', $('#share-instagram')), 600);
 }
 
