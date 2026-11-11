@@ -213,8 +213,9 @@ export function sceneGeometry(ctx, d, sticker) {
     const w = fitW * (sticker.view?.scale || 1);
     const h = w * ih / iw;
     const cx = MASTER.w / 2 + (sticker.view?.dx || 0);
-    // The dog can be moved up and sideways, never down into the plate's band.
-    const bottom = Math.min(floor, floor + (sticker.view?.dy || 0));
+    // The dog starts with his feet just above the plate and can be moved anywhere from there, in both
+    // directions; the panel and the plate are drawn over him, so the words always stay readable.
+    const bottom = floor + (sticker.view?.dy || 0);
     dog = { x: cx - w / 2, y: bottom - h, w, h, img };
   }
   return { panel, footer, dog };
