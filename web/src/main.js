@@ -859,6 +859,21 @@ function report(detail, step) {
 window.addEventListener('error', (e) => report(`${e.message} @ ${String(e.filename || '').split('/').pop()}:${e.lineno}`));
 window.addEventListener('unhandledrejection', (e) => report(`unhandled: ${e.reason?.message || e.reason}`));
 
+// ---------- now on the wall ----------
+// The latest six dogs under Jetson's card, so a visitor sees the wall is alive before the steps.
+async function showRecent() {
+  try {
+    const r = await fetch('/api/recent');
+    const j = r.ok ? await r.json() : null;
+    const entries = j?.entries || [];
+    if (entries.length < 2) return;
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    $('#recent-grid').innerHTML = entries.map((e) => `<a href="/d/${esc(e.id)}"><img src="/p/${esc(e.id)}/card.jpg" alt="${esc(e.dog_name)}’s dedication" loading="lazy" width="300" height="300" /><span>${esc(e.dog_name)}<small>♥ ${Number(e.hearts) || 0}</small></span></a>`).join('');
+    $('#recent').hidden = false;
+  } catch { /* the strip is a bonus */ }
+}
+showRecent();
+
 // ---------- boot ----------
 async function boot() {
   $('#start').addEventListener('click', () => track('maker_start_tapped'));

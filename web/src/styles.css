@@ -46,6 +46,18 @@ h2 { font-size: 24px; display: flex; align-items: center; gap: 10px; }
 .example-figure img { display: block; width: 100%; height: auto; border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0,0,0,0.18); }
 .example-figure figcaption { margin-top: 10px; color: var(--quiet); font-size: 15px; font-style: italic; }
 .example-figure .example-label { display: block; margin: 0 0 2px; font-style: normal; }
+.example-actions { justify-content: center; margin-top: 0; }
+/* The latest dogs, under Jetson's card: the wall is alive before anyone scrolls to the steps. */
+.recent { max-width: 640px; margin: 0 auto; padding: 8px 16px 24px; text-align: center; }
+.recent h2 { font-size: 22px; margin-bottom: 12px; }
+.recent-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.recent-grid a { display: block; text-decoration: none; color: var(--ink); }
+.recent-grid img { display: block; width: 100%; height: auto; aspect-ratio: 1; object-fit: cover; border-radius: 10px; box-shadow: 0 6px 18px rgba(0,0,0,0.14); background: var(--paper-2); }
+.recent-grid span { display: flex; justify-content: space-between; gap: 6px; margin-top: 6px; font-size: 15px; }
+.recent-grid small { color: var(--quiet); font-family: var(--sans); font-size: 12px; }
+.recent .hint { margin-top: 12px; }
+@media (min-width: 720px) { .recent { max-width: 800px; } .recent-grid { grid-template-columns: repeat(6, 1fr); } }
+.bottom-nav a { color: var(--quiet); }
 .example-mode { margin: 0; font-size: 14px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--quiet); }
 .example-name { margin: 4px 0 10px; font-size: 40px; font-weight: 600; }
 .example-line { margin: 0; font-style: italic; font-size: 20px; }
