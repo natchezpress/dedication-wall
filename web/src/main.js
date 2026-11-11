@@ -685,6 +685,7 @@ $('#post-link').addEventListener('click', async () => {
     startPolling();
   } catch (e) {
     postStatus(/minute|plenty|too many/.test(e.message) ? e.message : `Couldn’t send the link (${e.message}). Try again in a minute.`);
+    if (!/minute|plenty|too many/.test(e.message)) report(`sign-in link: ${e.message}`, 'post');
   }
 });
 $('#wait-resend').addEventListener('click', async () => {
@@ -753,6 +754,7 @@ $('#post-form').addEventListener('submit', async (ev) => {
   } catch (e) {
     status.textContent = `Couldn’t post (${e.message}). Nothing was saved; try again.`;
     status.scrollIntoView({ block: 'nearest' });
+    report(`post: ${e.message}`, 'post');
   } finally { btn.textContent = 'Post it'; readyToPost(); }
 });
 $('#done-again').addEventListener('click', () => { location.href = '/'; });
@@ -840,6 +842,22 @@ $('#tell-copy').addEventListener('click', async () => {
   const url = `${location.origin}/?utm_source=tell&utm_medium=copy&utm_campaign=ops-57`;
   try { await navigator.clipboard.writeText(url); $('#tell-status').textContent = 'Link copied.'; track('tell_friends', { via: 'copy' }); } catch { $('#tell-status').textContent = url; }
 });
+
+// ---------- the page reports its own errors ----------
+// A JavaScript error or a dead call goes to /api/log with the step it happened on and nothing else;
+// five per page load at most. The server keeps the browser family, not the address.
+let reported = 0;
+function report(detail, step) {
+  if (reported >= 5) return;
+  reported++;
+  try {
+    const live = $('#step-live')?.textContent || '';
+    const body = JSON.stringify({ detail: String(detail).slice(0, 240), step: step || live.replace(/^Step \d+ of \d+: /, '').slice(0, 40) });
+    if (!navigator.sendBeacon?.('/api/log', new Blob([body], { type: 'application/json' }))) fetch('/api/log', { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true }).catch(() => {});
+  } catch { /* nothing to do */ }
+}
+window.addEventListener('error', (e) => report(`${e.message} @ ${String(e.filename || '').split('/').pop()}:${e.lineno}`));
+window.addEventListener('unhandledrejection', (e) => report(`unhandled: ${e.reason?.message || e.reason}`));
 
 // ---------- boot ----------
 async function boot() {
