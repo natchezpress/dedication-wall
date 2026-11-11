@@ -131,7 +131,11 @@ const tellHtml = (site) => `
 })();
 </script>`;
 
-const cardHtml = (e) => `<a class="card" href="/d/${h(e.id)}"><img src="/p/${h(e.id)}/card.jpg" alt="${h(e.dog_name)}" loading="lazy" /><div class="meta"><span class="name">${h(e.dog_name)}</span><span class="hearts">♥ ${e.hearts}</span></div></a>`;
+// A post whose pictures were fixed from /admin has new file names (…-v<time>.jpg); the version rides on
+// every picture address so browsers that cached the old pictures fetch the new ones.
+export const picV = (key) => (/-v(\d+)\.jpg$/.exec(key || '') || [])[1] || '';
+const withV = (url, key, sep = '?') => (picV(key) ? `${url}${sep}v=${picV(key)}` : url);
+const cardHtml = (e) => `<a class="card" href="/d/${h(e.id)}"><img src="${withV(`/p/${h(e.id)}/card.jpg`, e.card_key)}" alt="${h(e.dog_name)}" loading="lazy" /><div class="meta"><span class="name">${h(e.dog_name)}</span><span class="hearts">♥ ${e.hearts}</span></div></a>`;
 
 export function wallPage({ entries, dotd, memory = false, site }) {
   const title = memory ? 'In Memory · Every Dog Deserves a Dedication' : 'The Dedication Wall';
@@ -139,7 +143,7 @@ export function wallPage({ entries, dotd, memory = false, site }) {
     ? 'A quiet wall for the dogs we have lost, each with the dedication they deserved.'
     : 'Dogs and the dedications their people wrote for them, from readers of Jetson’s Journey.';
   const body = `
-${!memory && dotd ? `<div class="dotd"><img src="/p/${h(dotd.id)}/card.jpg" alt="" /><div><div class="lab">Dog of the day</div><div class="dogname" style="font-size:26px;margin:2px 0 4px">${h(dotd.dog_name)}</div><div class="line" style="font-size:18px;margin:0 0 6px">${h(dotd.line)}</div><a href="/d/${h(dotd.id)}">See the page →</a></div></div>` : ''}
+${!memory && dotd ? `<div class="dotd"><img src="${withV(`/p/${h(dotd.id)}/card.jpg`, dotd.card_key)}" alt="" /><div><div class="lab">Dog of the day</div><div class="dogname" style="font-size:26px;margin:2px 0 4px">${h(dotd.dog_name)}</div><div class="line" style="font-size:18px;margin:0 0 6px">${h(dotd.line)}</div><a href="/d/${h(dotd.id)}">See the page →</a></div></div>` : ''}
 <p class="lede">${memory ? 'For the dogs who are gone. Hearts are welcome.' : 'Newest first. Tap a dog to see the page and leave a heart.'}</p>
 ${entries.length ? `<div class="grid">${entries.map(cardHtml).join('')}</div>` : `<div class="empty">${memory ? 'No dedications here yet.' : 'The wall is empty for now. Be the first: <a href="/">make a dedication</a>.'}</div>`}
 ${tellHtml(site)}`;
@@ -151,7 +155,7 @@ export function dogPage({ e, site, hearted = false, owner = null }) {
   const modeText = e.mode === 'in_memory' ? 'In memory of' : 'To';
   const title = `${modeText} ${e.dog_name} · Every Dog Deserves a Dedication`;
   const description = e.line;
-  const image = `${site}/p/${e.id}/card.jpg`;
+  const image = withV(`${site}/p/${e.id}/card.jpg`, e.card_key);
   const q = owner?.pending ? `?k=${h(owner.key)}` : '';
   let ownerHtml = '';
   if (owner) {
@@ -172,7 +176,7 @@ export function dogPage({ e, site, hearted = false, owner = null }) {
   }
   const body = `
 <div class="dog">
-  <img class="story" src="/p/${h(e.id)}/story.jpg${q}" alt="${h(e.dog_name)}’s dedication page" />
+  <img class="story" src="${withV(`/p/${h(e.id)}/story.jpg${q}`, e.story_key, q ? '&' : '?')}" alt="${h(e.dog_name)}’s dedication page" />
   <div class="words">
     <div class="mode">${modeText}</div>
     <div class="dogname">${h(e.dog_name)}</div>

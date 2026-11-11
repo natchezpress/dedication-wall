@@ -14,7 +14,10 @@ function landingSource() {
     return JSON.parse(sessionStorage.getItem(SOURCE_KEY) || 'null') || { source: document.referrer ? 'referrer' : 'direct', medium: '', campaign: '' };
   } catch { return { source: 'unknown', medium: '', campaign: '' }; }
 }
-const track = (name, params = {}) => { try { const s = landingSource(); window.gtag?.('event', name, { entry_source: s.source, entry_medium: s.medium, ...params }); } catch (_) { /* no analytics */ } };
+// /?fix=<id> (from /admin): the maker reopens a posted dog so its pictures can be laid out again. Nothing
+// in fix mode counts in GA4 or touches the admin's own saved draft.
+const FIX = (() => { try { return (new URLSearchParams(location.search).get('fix') || '').replace(/[^a-z0-9]/g, ''); } catch { return ''; } })();
+const track = (name, params = {}) => { if (FIX) return; try { const s = landingSource(); window.gtag?.('event', name, { entry_source: s.source, entry_medium: s.medium, ...params }); } catch (_) { /* no analytics */ } };
 const fired = new Set();
 const trackOnce = (name, params = {}) => { if (fired.has(name)) return; fired.add(name); track(name, params); };
 
@@ -559,6 +562,7 @@ function idb() {
   });
 }
 async function idbSet(key, value) {
+  if (FIX) return;
   try { const db = await idb(); await new Promise((res, rej) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(value, key); t.oncomplete = res; t.onerror = () => rej(t.error); }); } catch { /* no storage */ }
 }
 async function idbGet(key) {
@@ -570,6 +574,7 @@ async function idbDel(key) {
 let draftTimer = 0;
 function saveDraftNow() {
   clearTimeout(draftTimer);
+  if (FIX) return;
   try {
     localStorage.setItem(DRAFT_KEY, JSON.stringify({ mode: state.mode, name: state.name, line: state.line, bg: state.bg?.id, bgChosen: state.bgChosen, layout: state.layout, cutout: cutoutOn(), view: state.photo?.view || null, t: Date.now() }));
   } catch { /* no storage */ }
@@ -957,7 +962,7 @@ async function showRecent() {
     const entries = j?.entries || [];
     if (entries.length < 2) return;
     const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-    $('#recent-grid').innerHTML = entries.map((e) => `<a href="/d/${esc(e.id)}"><img src="/p/${esc(e.id)}/card.jpg" alt="${esc(e.dog_name)}’s dedication" loading="lazy" width="300" height="300" /><span>${esc(e.dog_name)}<small>♥ ${Number(e.hearts) || 0}</small></span></a>`).join('');
+    $('#recent-grid').innerHTML = entries.map((e) => `<a href="/d/${esc(e.id)}"><img src="/p/${esc(e.id)}/card.jpg${e.v ? `?v=${esc(e.v)}` : ''}" alt="${esc(e.dog_name)}’s dedication" loading="lazy" width="300" height="300" /><span>${esc(e.dog_name)}<small>♥ ${Number(e.hearts) || 0}</small></span></a>`).join('');
     $('#recent').hidden = false;
   } catch { /* the strip is a bonus */ }
 }
@@ -974,11 +979,66 @@ async function boot() {
   const def = state.manifest.backgrounds.find((e) => e.default) || state.manifest.backgrounds[0];
   await selectBackground(def);
   if (!visibleEntries('today').length) { state.group = 'always'; renderTabs(); renderGrid(); }
-  await restoreDraft();
+  if (FIX) await loadFix(FIX); else await restoreDraft();
   renderTabs(); renderGrid();
   draw();
   window.addEventListener('resize', draw);
   document.fonts?.ready?.then(draw);
-  initPost();
+  if (!FIX) initPost();
 }
+
+// ---------- fix mode (admin) ----------
+// Loads the post's own photo, words and background, ticks the cutout (untick for a book-page post), and
+// swaps Step 4 for one button that replaces the three pictures. The words fields are locked: changing what
+// an owner wrote is not a layout fix.
+async function loadFix(id) {
+  const panel = $('#fix-panel'), st = $('#fix-status'), go = $('#fix-go');
+  $('#post-cta').hidden = true; $('#post-flow').hidden = true; panel.hidden = false;
+  try {
+    const r = await fetch(`/api/admin/entry/${id}`, { cache: 'no-store' });
+    if (r.status === 401) { st.textContent = 'Open /admin in this browser first (the admin cookie lives there), then come back.'; return; }
+    const j = await r.json();
+    if (!r.ok || !j.ok) { st.textContent = `Couldn’t load that post (${j.error || r.status}).`; return; }
+    const e = j.entry;
+    $('#fix-dog').textContent = e.dog_name;
+    state.name = e.dog_name; state.line = e.line; state.mode = e.mode === 'in_memory' ? 'inMemory' : 'for';
+    $('#name').value = e.dog_name; $('#line').value = e.line; $('#count').textContent = `${e.line.length} / 120`;
+    $('#name').readOnly = true; $('#line').readOnly = true;
+    document.querySelectorAll('input[name="mode"]').forEach((el) => { el.checked = el.value === state.mode; el.disabled = true; });
+    const bg = state.manifest.backgrounds.find((b) => b.id === e.background_id);
+    if (bg) { state.bgChosen = true; await selectBackground(bg); }
+    const pr = await fetch(`/api/admin/entry/${id}/original`, { cache: 'no-store' });
+    if (!pr.ok) { st.textContent = `The original photo didn’t load (${pr.status}).`; return; }
+    const blob = await pr.blob();
+    const file = new File([blob], 'original.jpg', { type: blob.type || 'image/jpeg' });
+    const img = await loadImage(URL.createObjectURL(file));
+    state.photo = { img, file, view: { scale: 1, dx: 0, dy: 0 } };
+    $('#photo-label').textContent = 'Change photo';
+    $('#cutout-on').checked = true;
+    updateHint(); draw();
+    st.textContent = 'Cutting the dog out…';
+    await requestCutout();
+    st.textContent = state.cutout?.status === 'ok' ? 'Ready. Move things in the preview, then replace the pictures.' : 'The cutout didn’t work; untick the box to fix it as a book page.';
+    go.disabled = false;
+    window.__fix = { state, draw }; // for exact nudges from the console
+  } catch (err) {
+    st.textContent = `Couldn’t load that post (${err.message}).`;
+  }
+}
+$('#fix-go').addEventListener('click', async () => {
+  const st = $('#fix-status'), go = $('#fix-go');
+  go.disabled = true; go.textContent = 'Drawing…'; st.textContent = '';
+  try {
+    const [story, feed, card] = await Promise.all([makeFile('story'), makeFile('feed'), makeFile('card')]);
+    const fd = new FormData(); fd.set('story', story); fd.set('feed', feed); fd.set('card', card);
+    go.textContent = 'Replacing…';
+    const r = await fetch(`/api/admin/entry/${FIX}/pictures`, { method: 'POST', body: fd });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || String(r.status));
+    st.innerHTML = '';
+    st.append('Replaced. ', Object.assign(document.createElement('a'), { href: `/d/${FIX}`, textContent: 'See the page' }), '.');
+  } catch (err) {
+    st.textContent = `Couldn’t replace the pictures (${err.message}). The old ones are still up.`;
+  } finally { go.disabled = false; go.textContent = 'Replace the pictures'; }
+});
 boot();
