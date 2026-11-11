@@ -87,6 +87,7 @@
         <p class="hint">A page of their own on the Dedication Wall, with a link for friends and a heart they can leave. Free; take it down any time. Then share it to Instagram, Facebook or Messages, or save the picture.</p>
       </div>
       <div class="post-flow" id="post-flow" hidden>
+        <p class="flow-title">Put <span id="flow-dog">my dog</span> on the wall</p>
         <div id="post-signin">
           <label class="field"><span>Your email <small>for a sign-in link; never shown</small></span><input type="email" id="post-email" autocomplete="email" placeholder="you@example.com" /></label>
           <button type="button" class="button primary" id="post-link">Send me a sign-in link</button>
@@ -105,8 +106,8 @@
           <label class="check"><input type="checkbox" id="post-show" /><span>Show <span id="post-dog">my dog</span> on the public wall.</span></label>
           <label class="check"><input type="checkbox" id="post-news" /><span>Email me when there’s something new from Brock Alston. Optional.</span></label>
           <p class="hint">Posting means you agree to the <a href="/terms">Terms</a> and the <a href="/privacy">Privacy Policy</a>. We look at every post before it goes up.</p>
-          <button type="submit" class="button primary" id="post-submit">Post it</button>
-          <p class="hint" id="post-form-status"></p>
+          <button type="submit" class="button primary" id="post-submit" disabled>Post it</button>
+          <p class="hint" id="post-form-status">Tick the first two boxes to post.</p>
         </form>
         <div class="done" id="post-done" hidden>
           <p class="done-title"><strong id="done-dog">Your dog</strong> <span id="done-state">is in the queue.</span></p>

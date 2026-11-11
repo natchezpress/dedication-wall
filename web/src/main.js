@@ -186,16 +186,21 @@ function cueAfterWords() {
 function cueAfterBackground() {
   if (!state.photo) return;
   settle($('#step-share'));
-  nudge('share', $('#post-cta').hidden ? $('#share-instagram') : $('#post-cta-btn'), 4, 'Share');
+  const flowOpen = !$('#post-flow').hidden;
+  const target = flowOpen ? ($('#post-form').hidden ? $('#post-link') : $('#post-submit')) : ($('#post-cta').hidden ? $('#share-instagram') : $('#post-cta-btn'));
+  nudge('share', target, 4, 'Share');
 }
 // After a share or a save, the wall button gets one more pulse (only when posting is open).
 function cueAfterShare() {
   if ($('#post-cta').hidden || post.url) return;
   nudge('post', $('#post-cta-btn'));
 }
-// "Put <Name> on the wall" opens the sign-in flow in place.
+// "Put <Name> on the wall" opens the sign-in flow in place; the button steps aside and the box takes
+// its words as a title, so there is never a second navy button above the one that matters.
 function openPostFlow() {
   const flow = $('#post-flow');
+  $('#flow-dog').textContent = state.name.trim() || 'my dog';
+  $('#post-cta').hidden = true;
   if (flow.hidden) { flow.hidden = false; }
   settle(flow);
 }
@@ -409,7 +414,7 @@ document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListene
   $('#suggestions').hidden = true;
   draw();
 }));
-$('#name').addEventListener('input', (ev) => { state.name = ev.target.value; draw(); cueAfterName(); cueAfterWords(); const d = $('#post-cta-dog'); if (d) d.textContent = state.name.trim() || 'my dog'; });
+$('#name').addEventListener('input', (ev) => { state.name = ev.target.value; draw(); cueAfterName(); cueAfterWords(); const n = state.name.trim() || 'my dog'; for (const id of ['#post-cta-dog', '#flow-dog']) { const d = $(id); if (d) d.textContent = n; } });
 $('#line').addEventListener('input', (ev) => {
   state.line = ev.target.value;
   $('#count').textContent = `${state.line.length} / 120`;
@@ -599,8 +604,11 @@ function showSignedIn(email) {
   trackOnce('signed_in');
   post.email = email;
   clearInterval(resendTimer);
+  $('#flow-dog').textContent = state.name.trim() || 'my dog';
+  if (post.config?.posting) $('#post-cta').hidden = true;
   $('#post-flow').hidden = false;
   $('#post-signin').hidden = true;
+  setTimeout(readyToPost, 0);
   $('#post-wait').hidden = true;
   $('#post-form').hidden = false;
   $('#post-who').textContent = email;
@@ -693,13 +701,23 @@ $('#wait-change').addEventListener('click', () => {
   $('#post-email').focus({ preventScroll: true });
 });
 
+// The button only works when it can: the two required boxes enable it, and the line under it says
+// why when it is off. While it works, the button itself says so, since the line under it may be
+// below the edge of a phone screen.
+function readyToPost() {
+  const status = $('#post-form-status'), btn = $('#post-submit');
+  const boxes = $('#post-attest').checked && $('#post-show').checked;
+  const parts = state.photo?.file && state.name.trim() && state.line.trim() && state.bg;
+  btn.disabled = !(boxes && parts);
+  status.textContent = !boxes ? 'Tick the first two boxes to post.' : !parts ? 'A photo, a name, a line and a background are all needed.' : '';
+}
+for (const id of ['#post-attest', '#post-show']) $(id).addEventListener('change', readyToPost);
 $('#post-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const status = $('#post-form-status');
-  if (!$('#post-attest').checked) { status.textContent = 'The first box is required: 18 or older, and your dog or your permission.'; return; }
-  if (!$('#post-show').checked) { status.textContent = 'Tick “Show on the public wall” to post; that is what posting is.'; return; }
-  if (!state.photo?.file || !state.name.trim() || !state.line.trim() || !state.bg) { status.textContent = 'A photo, a name, a line and a background are all needed.'; return; }
-  const btn = $('#post-submit'); btn.disabled = true; status.textContent = 'Making the page…';
+  readyToPost();
+  if ($('#post-submit').disabled) { status.scrollIntoView({ block: 'nearest' }); return; }
+  const btn = $('#post-submit'); btn.disabled = true; btn.textContent = 'Making the page…'; status.textContent = 'Drawing the three sizes; a few seconds on a phone.';
   try {
     const [story, feed, card] = await Promise.all([makeFile('story'), makeFile('feed'), makeFile('card')]);
     const fd = new FormData();
@@ -709,7 +727,7 @@ $('#post-form').addEventListener('submit', async (ev) => {
     fd.set('attest', 'on'); fd.set('newsletter', $('#post-news').checked ? 'on' : 'off');
     fd.set('original', state.photo.file, state.photo.file.name || 'original.jpg');
     fd.set('story', story); fd.set('feed', feed); fd.set('card', card);
-    status.textContent = 'Posting…';
+    btn.textContent = 'Posting…'; status.textContent = '';
     const r = await fetch('/api/post', { method: 'POST', body: fd });
     const j = await r.json().catch(() => ({}));
     if (r.status === 401) { status.textContent = 'Your sign-in expired. Ask for a new link.'; $('#post-form').hidden = true; $('#post-wait').hidden = true; $('#post-signin').hidden = false; return; }
@@ -726,7 +744,8 @@ $('#post-form').addEventListener('submit', async (ev) => {
     clearDraft();
   } catch (e) {
     status.textContent = `Couldn’t post (${e.message}). Nothing was saved; try again.`;
-  } finally { btn.disabled = false; }
+    status.scrollIntoView({ block: 'nearest' });
+  } finally { btn.textContent = 'Post it'; readyToPost(); }
 });
 $('#done-again').addEventListener('click', () => { location.href = '/'; });
 // The screener usually answers within seconds. For half a minute after the post, ask whether the page went
@@ -760,6 +779,7 @@ async function initPost() {
   cta.hidden = false;
   $('#post-cta-dog').textContent = state.name.trim() || 'my dog';
   if (post.config.signed_in) showSignedIn(post.config.signed_in);
+  if (!$('#post-flow').hidden) cta.hidden = true;
   if (location.hash === '#step-share' || location.hash === '#step-post') setTimeout(() => settle($('#step-share')), 300);
 }
 for (const id of ['#name', '#line']) $(id).addEventListener('input', saveDraft);
