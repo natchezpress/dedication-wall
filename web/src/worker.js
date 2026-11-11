@@ -29,6 +29,7 @@ export default {
 
       // ----- api -----
       if (p === '/api/health') return health(env);
+      if (p === '/api/recent' && request.method === 'GET') return recent(env);
       if (p === '/api/config') return config(env, request);
       if (p === '/api/request' && request.method === 'POST') return requestBackground(env, request);
       if (p === '/api/heart' && request.method === 'POST') return heart(env, request);
@@ -85,6 +86,12 @@ const MAX_INVITES = 5;                 // per dedication, for its lifetime
 const inviteKey = (env, id) => sha256(`${secret(env)}|invite|${id}`);
 const inviteeHash = (env, email) => sha256(`${secret(env)}|invitee|${email}`);
 const unsubSig = async (env, hash) => (await sha256(`${secret(env)}|unsub|${hash}`)).slice(0, 24);
+
+// The latest dogs on the wall, for the strip under Jetson's card. Public, cached a minute.
+async function recent(env) {
+  const { results } = await env.DB.prepare('SELECT id, dog_name, hearts FROM entries WHERE status = \'live\' AND is_test = 0 ORDER BY live_at DESC LIMIT 6').all();
+  return json({ ok: true, entries: results }, 200, { 'cache-control': 'public, max-age=60' });
+}
 
 async function health(env) {
   const t = await env.DB.prepare('SELECT COUNT(*) AS n FROM entries').first();
