@@ -190,7 +190,9 @@ function drawBook(ctx, d, photo) {
 const SCENE = {
   panel: { x: 164, y: 700, w: MASTER.w - 328, pad: 56 }, // top sits inside the 1:1 card (starts 648); height follows the words
   footerTop: 2080,                                       // plate 2080–2280: inside the 1:1 card (ends 2296), so every cut carries it
-  topMin: 60, bottomMax: MASTER.h - 60, gap: 480, dogGap: 20, roomMin: 240, // gap: the band kept for the dog between panel and plate
+  // The panel and the plate drag only within the square card (y 648–2296), so the words and the address
+  // always show on the wall and in every link preview (11/11: Lola's card lost “To Lola” and the plate).
+  topMin: CUTS.card.y + 24, bottomMax: CUTS.card.y + CUTS.card.h - 16, gap: 480, dogGap: 20, roomMin: 240, // gap: the band kept for the dog between panel and plate
 };
 
 // Everything the scene needs, in master pixels: where the panel, the plate and the dog are.
@@ -200,9 +202,9 @@ export function sceneGeometry(ctx, d, sticker) {
   const panelY = Math.min(Math.max(SCENE.topMin, SCENE.panel.y + (lay.panelDy || 0)), SCENE.bottomMax - FOOTER.h - SCENE.gap - panelH);
   const footerMin = panelY + panelH + SCENE.gap;
   const footerY = Math.min(Math.max(footerMin, SCENE.footerTop + (lay.footerDy || 0)), SCENE.bottomMax - FOOTER.h);
-  const panel = { x: SCENE.panel.x, y: panelY, w: SCENE.panel.w, h: panelH };
   const footer = { x: 0, y: footerY, w: MASTER.w, h: FOOTER.h };
-  let dog = null;
+  let dog = null, dogDy = 0;
+  let topY = panelY;
   if (sticker?.img) {
     const img = sticker.img;
     const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
@@ -217,8 +219,20 @@ export function sceneGeometry(ctx, d, sticker) {
     // directions; the panel and the plate are drawn over him, so the words always stay readable.
     const bottom = floor + (sticker.view?.dy || 0);
     dog = { x: cx - w / 2, y: bottom - h, w, h, img };
+    // …but the words never cover him (Tanner and Lola, 11/11: pinched bigger or dragged up, the dog's head
+    // went behind the panel). If he reaches up into it, the panel moves up out of his way, as far as the top
+    // of the square card; past that, he stops at the panel and keeps his size (a very big dog runs down
+    // behind the plate instead). A dog dragged wholly above the panel, or off to one side of it, is left alone.
+    const across = dog.x < SCENE.panel.x + SCENE.panel.w && dog.x + dog.w > SCENE.panel.x;
+    if (across && bottom > panelY && dog.y < panelY + panelH + SCENE.dogGap) {
+      topY = Math.max(SCENE.topMin, dog.y - SCENE.dogGap - panelH);
+      const clear = topY + panelH + SCENE.dogGap;
+      if (dog.y < clear) dog = { ...dog, y: clear };
+    }
+    dogDy = dog.y + dog.h - floor;
   }
-  return { panel, footer, dog };
+  const panel = { x: SCENE.panel.x, y: topY, w: SCENE.panel.w, h: panelH };
+  return { panel, footer, dog, dogDy };
 }
 
 // Which part of the scene is under a master-pixel point: 'panel', 'footer', 'dog' or null.

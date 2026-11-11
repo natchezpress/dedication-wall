@@ -1,4 +1,4 @@
-import { MASTER, CUTS, render, cut, ensureFonts, sceneHit } from './compose.js';
+import { MASTER, CUTS, render, cut, ensureFonts, sceneHit, sceneGeometry } from './compose.js';
 import { inWindow } from './windows.js';
 import { suggest } from './lines.js';
 
@@ -393,7 +393,11 @@ preview.addEventListener('pointermove', (ev) => {
     const dx = (ev.clientX - prev.x) * k, dy = (ev.clientY - prev.y) * k;
     if (dragTarget === 'panel') state.layout.panelDy += dy;
     else if (dragTarget === 'footer') state.layout.footerDy += dy;
-    else { state.photo.view.dx += dx; state.photo.view.dy += dy; }
+    else {
+      state.photo.view.dx += dx; state.photo.view.dy += dy;
+      // A dog stopped by the words keeps his real place, so dragging back down moves him at once.
+      if (isScene()) state.photo.view.dy = sceneGeometry(master.getContext('2d'), words(), photoForRender()).dogDy;
+    }
   }
   pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
   if (pointers.size === 2 && pinchStart) {
