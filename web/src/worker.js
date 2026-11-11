@@ -640,6 +640,8 @@ async function pageError(env, request, ctx) {
   const body = await request.json().catch(() => ({}));
   const detail = String(body.detail || '').replace(/\s+/g, ' ').trim().slice(0, 240);
   if (!detail) return bad('nothing to log');
+  // Pages opened before 11/11 still send the browser's blanked “Script error. @ :0” (someone else's script).
+  if (/^Script error\.?\s*@\s*:0$/i.test(detail)) return json({ ok: true, kept: false });
   const step = String(body.step || '').slice(0, 40);
   const vh = await visitorHash(request, secret(env));
   const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM failures WHERE kind = \'page\' AND visitor = ? AND at > ?').bind(vh, now() - 86400).first())?.n || 0;
