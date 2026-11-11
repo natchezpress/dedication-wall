@@ -160,7 +160,6 @@ textarea { resize: vertical; }
 .save-menu { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .save-menu .button { font-size: 15px; padding: 9px 14px; min-height: 40px; }
 /* Tell friends about the wall. */
-.tell { max-width: 640px; margin: 8px auto 0; padding: 24px 16px; border-top: 1px solid var(--line); }
 .tell h2 { font-size: 24px; }
 .tell .hint { margin: 0 0 12px; }
 /* Waiting for the sign-in link. */
