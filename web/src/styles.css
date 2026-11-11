@@ -127,6 +127,11 @@ textarea { resize: vertical; }
 .done p { margin: 0 0 10px; }
 .done-title { font-size: 22px; }
 .actions-inline { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.code-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-top: 14px; }
+.code-row .field { flex: 1 1 180px; margin: 0; }
+.code-row input { font-size: 22px; letter-spacing: 0.18em; font-variant-numeric: tabular-nums; }
+.home-keep { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }
+.home-keep .hint { margin-top: 8px; }
 .dev-link { display: inline-block; margin-top: 8px; font-family: var(--sans); font-size: 14px; }
 .bottom { text-align: center; color: var(--quiet); font-size: 15px; padding-bottom: 48px; }
 @media (min-width: 720px) {

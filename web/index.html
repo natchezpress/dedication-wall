@@ -105,9 +105,14 @@
           <p class="hint" id="post-status"></p>
         </div>
         <div class="wait" id="post-wait" hidden>
-          <p class="wait-title">Check your email for a sign-in link. It works for 15 minutes.</p>
+          <p class="wait-title" id="wait-title">Check your email for a sign-in link. It works for 15 minutes.</p>
           <p class="hint">Don’t see it? Look in Promotions.</p>
-          <p class="hint">Sent to <strong id="wait-email"></strong>. Tap the link on this phone, then come back here; this page will notice.</p>
+          <p class="hint" id="wait-link-hint">Sent to <strong id="wait-email"></strong>. Tap the link on this phone, then come back here; this page will notice.</p>
+          <form class="code-row" id="wait-code-form" autocomplete="off">
+            <label class="field"><span id="wait-code-label">Or type the six-digit code from the email</span><input type="text" id="wait-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" placeholder="123456" /></label>
+            <button type="submit" class="button primary" id="wait-code-go">Sign in</button>
+          </form>
+          <p class="hint" id="wait-code-status"></p>
           <p class="actions-inline"><button type="button" class="button quiet" id="wait-resend" disabled>Send it again</button> <button type="button" class="button quiet" id="wait-change">Use a different email</button></p>
           <p class="hint" id="wait-status"></p>
         </div>
@@ -125,6 +130,11 @@
           <p id="done-note">We look at every post before it goes up, usually within a day. You’ll get an email at <strong id="done-email"></strong> when it’s live, with the link and a way to invite friends.</p>
           <p><span id="done-will">The page will be</span> <a id="done-url" href="/wall"></a>.</p>
           <p class="actions-inline"><a class="button" href="/wall">See the wall</a> <button type="button" class="button quiet" id="done-again">Make another</button></p>
+          <div class="home-keep" id="home-keep" hidden>
+            <p><strong>Keep the wall on your phone.</strong> Add it to your home screen so you can easily come back and visit the Dedication Wall, and see who’s new.</p>
+            <button type="button" class="button" id="home-install" hidden>Add Dedication to your home screen</button>
+            <p class="hint" id="home-steps"></p>
+          </div>
         </div>
       </div>
       <p class="share-label" id="share-label" hidden>Share the page:</p>

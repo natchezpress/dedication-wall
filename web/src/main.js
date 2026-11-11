@@ -659,17 +659,52 @@ function armResend(seconds = 60) {
     btn.textContent = `Send it again (${left})`;
   }, 1000);
 }
-function showWaiting(email, devLink) {
+// Opened from the home-screen icon, the maker keeps its own cookies and draft, apart from the browser
+// the emailed link opens in; there the code is the way in.
+const fromHomeScreen = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+function showWaiting(email, devLink, devCode) {
   $('#post-signin').hidden = true;
   const wait = $('#post-wait');
   wait.hidden = false;
   $('#wait-email').textContent = email;
+  $('#wait-code').value = '';
+  $('#wait-code-status').textContent = '';
+  if (fromHomeScreen()) {
+    const hint = $('#wait-link-hint'), who = document.createElement('strong');
+    who.textContent = email;
+    hint.replaceChildren('Sent to ', who, '. Type the six-digit code from the email here; the link in it opens your browser instead of this app.');
+    $('#wait-code-label').textContent = 'The six-digit code from the email';
+    $('#wait-title').textContent = 'Check your email for a sign-in code. It works for 15 minutes.';
+  }
   const st = $('#wait-status');
-  if (devLink) st.innerHTML = `Test site: no email is sent. <a class="dev-link" href="${devLink}" target="_blank" rel="noopener">Open the sign-in link</a>, then come back here.`;
+  if (devLink) st.innerHTML = `Test site: no email is sent. <a class="dev-link" href="${devLink}" target="_blank" rel="noopener">Open the sign-in link</a>, then come back here.${devCode ? ` Or type ${devCode}.` : ''}`;
   else st.textContent = '';
   armResend();
   settle(wait);
 }
+$('#wait-code-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const code = $('#wait-code').value.replace(/\D/g, '');
+  const st = $('#wait-code-status');
+  if (code.length !== 6) { st.textContent = 'Six digits, from the newest email.'; return; }
+  const btn = $('#wait-code-go'); btn.disabled = true; st.textContent = 'Checking…';
+  try {
+    const r = await fetch('/api/auth/code', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: post.email, code }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) { st.textContent = j.error ? j.error.charAt(0).toUpperCase() + j.error.slice(1) + '.' : `Couldn’t check the code (${r.status}).`; track('code_failed'); return; }
+    st.textContent = '';
+    track('code_used', { home_screen: fromHomeScreen() });
+    showSignedIn(j.email || post.email);
+  } catch (e) {
+    st.textContent = 'Couldn’t reach the wall; check the connection and try again.';
+  } finally { btn.disabled = false; }
+});
+// Six digits typed (or filled from the email by the phone) signs in without another tap.
+$('#wait-code').addEventListener('input', (ev) => {
+  const v = ev.target.value.replace(/\D/g, '').slice(0, 6);
+  if (v !== ev.target.value) ev.target.value = v;
+  if (v.length === 6) $('#wait-code-form').requestSubmit();
+});
 $('#post-link').addEventListener('click', async () => {
   const email = $('#post-email').value.trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { postStatus('A real email, please; the link goes there.'); return; }
@@ -681,7 +716,7 @@ $('#post-link').addEventListener('click', async () => {
     const j = await sendLink(email);
     post.email = email;
     postStatus('');
-    showWaiting(email, j.dev_link);
+    showWaiting(email, j.dev_link, j.dev_code);
     startPolling();
   } catch (e) {
     postStatus(/minute|plenty|too many/.test(e.message) ? e.message : `Couldn’t send the link (${e.message}). Try again in a minute.`);
@@ -694,8 +729,9 @@ $('#wait-resend').addEventListener('click', async () => {
   st.textContent = 'Sending again…';
   try {
     const j = await sendLink(email, { resend: true });
-    st.textContent = j.dev_link ? '' : 'Sent again. The newest link is the one that works.';
-    if (j.dev_link) st.innerHTML = `Test site: <a class="dev-link" href="${j.dev_link}" target="_blank" rel="noopener">Open the new sign-in link</a>.`;
+    st.textContent = j.dev_link ? '' : 'Sent again. The newest link and code are the ones that work.';
+    if (j.dev_link) st.innerHTML = `Test site: <a class="dev-link" href="${j.dev_link}" target="_blank" rel="noopener">Open the new sign-in link</a>.${j.dev_code ? ` Or type ${j.dev_code}.` : ''}`;
+    $('#wait-code').value = ''; $('#wait-code-status').textContent = '';
     armResend();
     startPolling();
   } catch (e) {
@@ -747,6 +783,7 @@ $('#post-form').addEventListener('submit', async (ev) => {
     $('#done-email').textContent = post.email;
     const a = $('#done-url'); a.href = j.url; a.textContent = j.url.replace(/^https?:\/\//, '');
     $('#post-done').hidden = false;
+    showHomeKeep();
     shareLivePage(j.url);
     watchForLive(j.id);
     $('#post-done').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -758,6 +795,58 @@ $('#post-form').addEventListener('submit', async (ev) => {
   } finally { btn.textContent = 'Post it'; readyToPost(); }
 });
 $('#done-again').addEventListener('click', () => { location.href = '/'; });
+
+// ---------- keep the wall on your phone ----------
+// Shown once, after posting, on phones only, and never inside the home-screen app itself. Android Chrome
+// hands the page an install prompt (held back until now, so it never interrupts the making); iPhone has
+// none, in Safari or Chrome, so it gets the two steps instead.
+const phone = (() => {
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPod/.test(ua) || (/iPad|Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'ios';
+  if (/Android/.test(ua)) return 'android';
+  return '';
+})();
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (ev) => {
+  ev.preventDefault();
+  installPrompt = ev;
+  if (!$('#home-keep').hidden) $('#home-install').hidden = false;
+});
+window.addEventListener('appinstalled', () => {
+  track('homescreen_installed');
+  $('#home-install').hidden = true;
+  $('#home-steps').textContent = 'Added. Look for Jetson on your home screen.';
+});
+const HOME_STEPS = {
+  ios: 'Tap Share, then Add to Home Screen.',
+  android: 'Tap ⋮, then Add to Home screen.',
+};
+function showHomeKeep() {
+  if (!phone || fromHomeScreen()) return;
+  $('#home-keep').hidden = false;
+  if (phone === 'android' && installPrompt) {
+    $('#home-install').hidden = false;
+    $('#home-steps').textContent = '';
+  } else {
+    $('#home-steps').textContent = HOME_STEPS[phone];
+  }
+  track('homescreen_shown', { how: phone === 'android' && installPrompt ? 'button' : 'steps', phone });
+}
+$('#home-install').addEventListener('click', async () => {
+  if (!installPrompt) { $('#home-install').hidden = true; $('#home-steps').textContent = HOME_STEPS.android; return; }
+  const ev = installPrompt;
+  installPrompt = null;
+  try {
+    await ev.prompt();
+    const { outcome } = await ev.userChoice;
+    track('homescreen_prompt', { outcome });
+    $('#home-install').hidden = true;
+    $('#home-steps').textContent = outcome === 'accepted' ? 'Added. Look for Jetson on your home screen.' : `Any time: ${HOME_STEPS.android.charAt(0).toLowerCase()}${HOME_STEPS.android.slice(1)}`;
+  } catch {
+    $('#home-install').hidden = true;
+    $('#home-steps').textContent = HOME_STEPS.android;
+  }
+});
 // The screener usually answers within seconds. For half a minute after the post, ask whether the page went
 // live, and if so say so instead of "in the queue".
 function watchForLive(id) {
