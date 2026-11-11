@@ -12,7 +12,7 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     // Let the Worker run first for API and wall routes; static files still win for everything else.
-    "run_worker_first": ["/api/*", "/d/*", "/wall", "/memory", "/i/*", "/u/*", "/privacy", "/terms", "/admin", "/admin/*", "/p/*"]
+    "run_worker_first": ["/api/*", "/d/*", "/wall", "/memory", "/i/*", "/u/*", "/privacy", "/terms", "/admin", "/admin/*", "/p/*", "/robots.txt", "/sitemap.xml"]
   },
   "d1_databases": [
     { "binding": "DB", "database_name": "dedication-wall", "database_id": "fbcce2c7-8c87-4c26-8b60-f0f255407ec0", "preview_database_id": "b1ff3d27-18e3-4302-961f-6ab378486e87", "migrations_dir": "migrations" }
