@@ -954,7 +954,11 @@ function report(detail, step) {
     if (!navigator.sendBeacon?.('/api/log', new Blob([body], { type: 'application/json' }))) fetch('/api/log', { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true }).catch(() => {});
   } catch { /* nothing to do */ }
 }
-window.addEventListener('error', (e) => report(`${e.message} @ ${String(e.filename || '').split('/').pop()}:${e.lineno}`));
+// Only errors from the wall's own scripts. A browser blanks an error from anyone else's script to
+// “Script error.” with no file or line (Firefox on iPhone adds its own scripts to every page; Google's
+// tag is another): nothing we can act on, and it set off a false alert on 11/11.
+const ours = (file) => { try { return !!file && new URL(file, location.href).origin === location.origin; } catch { return false; } };
+window.addEventListener('error', (e) => { if (ours(e.filename)) report(`${e.message} @ ${String(e.filename).split('/').pop()}:${e.lineno}`); });
 window.addEventListener('unhandledrejection', (e) => report(`unhandled: ${e.reason?.message || e.reason}`));
 
 // ---------- now on the wall ----------
