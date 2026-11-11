@@ -1,0 +1,16 @@
+{
+  "id": "/",
+  "name": "Every Dog Deserves a Dedication",
+  "short_name": "Dedication",
+  "description": "Write a book-style dedication for your dog in under a minute, from the novel Jetson’s Journey.",
+  "start_url": "/?utm_source=homescreen&utm_medium=app&utm_campaign=ops-57",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f1e6",
+  "theme_color": "#f7f1e6",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

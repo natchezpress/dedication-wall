@@ -26,6 +26,8 @@ export default {
       if (p.startsWith('/u/') && request.method === 'GET') return unsubscribe(env, request, p.slice(3), url);
       if (p === '/privacy') return Response.redirect('https://brockalston.com/privacy-policy', 302);
       if (p === '/terms') return Response.redirect('https://brockalston.com/terms-of-use', 302);
+      if (p === '/robots.txt') return robots(env);
+      if (p === '/sitemap.xml') return sitemap(env);
 
       // ----- api -----
       if (p === '/api/health') return health(env);
@@ -91,6 +93,34 @@ const unsubSig = async (env, hash) => (await sha256(`${secret(env)}|unsub|${hash
 async function recent(env) {
   const { results } = await env.DB.prepare('SELECT id, dog_name, hearts FROM entries WHERE status = \'live\' AND is_test = 0 ORDER BY live_at DESC LIMIT 6').all();
   return json({ ok: true, entries: results }, 200, { 'cache-control': 'public, max-age=60' });
+}
+
+// ---------------------------------------------------------------- search engines
+// Before these, both paths fell through to the maker's index.html. The preview (DEV_MODE) is a copy of the
+// site with test dogs, so it asks not to be crawled at all. /admin is left crawlable on purpose: it answers
+// with a noindex header and tag, which a crawler can only see if it is allowed to fetch the page.
+function robots(env) {
+  const body = devMode(env)
+    ? 'User-agent: *\nDisallow: /\n'
+    : `User-agent: *\nDisallow: /api/\nDisallow: /i/\nDisallow: /u/\n\nSitemap: ${site(env)}/sitemap.xml\n`;
+  return new Response(body, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
+}
+
+// The maker, both walls, and every live dog's page (test dogs never). Cached an hour.
+async function sitemap(env) {
+  const { results } = await env.DB.prepare('SELECT id, mode, live_at FROM entries WHERE status = \'live\' AND is_test = 0 ORDER BY live_at DESC LIMIT 5000').all();
+  const day = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
+  const newest = (mode) => results.find((e) => e.mode === mode)?.live_at;
+  const url = (loc, ts) => `  <url><loc>${h(loc)}</loc>${ts ? `<lastmod>${day(ts)}</lastmod>` : ''}</url>`;
+  const base = site(env);
+  const lines = [
+    url(`${base}/`),
+    url(`${base}/wall`, newest('for')),
+    url(`${base}/memory`, newest('in_memory')),
+    ...results.map((e) => url(`${base}/d/${e.id}`, e.live_at)),
+  ];
+  const body = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${lines.join('\n')}\n</urlset>\n`;
+  return new Response(body, { headers: { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
 }
 
 async function health(env) {
@@ -713,9 +743,9 @@ async function admin(env, request, url) {
 
 async function adminPage(env, request, url) {
   if (!(await adminAuth(env, request, url))) {
-    return html(simplePage({ title: 'Admin', bodyHtml: '<p>Admin token needed. Open this page with <code>?token=…</code> once; a cookie keeps you signed in.</p>', noindex: true }), 401);
+    return html(simplePage({ title: 'Admin', bodyHtml: '<p>Admin token needed. Open this page with <code>?token=…</code> once; a cookie keeps you signed in.</p>', noindex: true }), 401, { 'x-robots-tag': 'noindex, nofollow' });
   }
-  const headers = {};
+  const headers = { 'x-robots-tag': 'noindex, nofollow' };
   if (url.searchParams.get('token')) headers['set-cookie'] = `dw_admin=${await sha256(`${adminToken(env)}|admin`)}; Path=/; Max-Age=${90 * 86400}; HttpOnly; SameSite=Lax; Secure`;
   const s = await settings(env);
   const { results: queue } = await env.DB.prepare('SELECT id, dog_name, line, mode, owner_email, screen_result, created_at, is_test FROM entries WHERE status = \'pending\' ORDER BY created_at ASC LIMIT 50').all();
