@@ -134,6 +134,20 @@
       <p class="hint" id="share-hint" hidden>These open your share sheet with the picture; pick the app there. Where there’s no share sheet, the picture downloads.</p>
     </section>
 
+    <section class="step tell" id="tell" aria-labelledby="tell-title">
+      <h2 id="tell-title">Know a dog who deserves one?</h2>
+      <p class="hint">Up to five friends. This opens your own mail app with a short note and the link; nothing is sent from here, and we never see the addresses.</p>
+      <form id="tell-form" class="tell-form">
+        <label class="field"><span>Friends’ emails <small>commas, spaces or semicolons between them</small></span><input type="text" id="tell-emails" inputmode="email" autocomplete="off" placeholder="ann@example.com, ben@example.com" /></label>
+        <p class="hint" id="tell-status"></p>
+        <div class="actions-inline">
+          <button type="submit" class="button primary" id="tell-send">Open my mail</button>
+          <button type="button" class="button quiet" id="tell-share">Share the wall</button>
+          <button type="button" class="button quiet" id="tell-copy">Copy link</button>
+        </div>
+      </form>
+    </section>
+
     <section class="step request" id="step-request">
       <h2>Request a background</h2>
       <p class="hint">Want one I don’t have yet (Hanukkah, St. Patrick’s, a lake)? One line and an email, and I will let you know when it goes live.</p>
@@ -145,20 +159,6 @@
       </form>
     </section>
   </main>
-
-  <section class="tell" id="tell" aria-labelledby="tell-title">
-    <h2 id="tell-title">Know a dog who deserves one?</h2>
-    <p class="hint">Up to five friends. This opens your own mail app with a short note and the link; nothing is sent from here, and we never see the addresses.</p>
-    <form id="tell-form" class="tell-form">
-      <label class="field"><span>Friends’ emails <small>commas, spaces or semicolons between them</small></span><input type="text" id="tell-emails" inputmode="email" autocomplete="off" placeholder="ann@example.com, ben@example.com" /></label>
-      <p class="hint" id="tell-status"></p>
-      <div class="actions-inline">
-        <button type="submit" class="button primary" id="tell-send">Open my mail</button>
-        <button type="button" class="button quiet" id="tell-share">Share the wall</button>
-        <button type="button" class="button quiet" id="tell-copy">Copy link</button>
-      </div>
-    </form>
-  </section>
 
   <footer class="bottom">
     <p><em>Every dog deserves a dedication.</em></p>
