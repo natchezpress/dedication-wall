@@ -93,6 +93,53 @@ export async function visitorHash(request, secret) {
 // ---------- mail (Resend) ----------
 // With no RESEND_API_KEY the message is logged as 'dev' and, in DEV_MODE, returned to the caller.
 // logTo: what the notices log records as the recipient (invites log a hash, never the address).
+// ---------- failure sensors ----------
+// Every outside dependency records a row when it fails; the page reports its own errors too. When a
+// kind keeps failing (ALERT_AT in an hour) Brock gets one email, then nothing more about that kind for
+// ALERT_REST. Mail failures are recorded but never emailed about, for the obvious reason.
+export const FAILURE_LABEL = {
+  cutout: 'the cutout', words: 'word help', screen: 'the screener', mail: 'email (Resend)', newsletter: 'the newsletter (MailerLite)',
+  post: 'posting', server: 'the server', cap: 'a daily cap', page: 'the page in a browser', canary: 'the nightly check',
+};
+const ALERT_AT = { post: 1, canary: 1, page: 5 };
+const ALERT_WINDOW = 3600, ALERT_REST = 6 * 3600;
+export function uaFamily(ua = '') {
+  const os = /iPhone|iPad/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android' : /Macintosh/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : 'other';
+  const br = /CriOS|Chrome/.test(ua) && !/Edg/.test(ua) ? 'Chrome' : /FxiOS|Firefox/.test(ua) ? 'Firefox' : /Edg/.test(ua) ? 'Edge' : /Safari/.test(ua) ? 'Safari' : 'other';
+  return `${br}/${os}`;
+}
+export async function failure(env, kind, detail, { visitor = null, ua = null } = {}) {
+  try {
+    await env.DB.prepare('INSERT INTO failures (at, kind, detail, visitor, ua) VALUES (?,?,?,?,?)')
+      .bind(now(), kind, String(detail || '').slice(0, 300), visitor, ua ? uaFamily(ua) : null).run();
+  } catch (e) { console.error('failure row', kind, String(e).slice(0, 120)); }
+}
+export async function alertIfNeeded(env, kind, { force = false } = {}) {
+  if (kind === 'mail' || !env.CONTACT_EMAIL) return false;
+  const t = now();
+  try {
+    const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM failures WHERE kind = ? AND at > ?').bind(kind, t - ALERT_WINDOW).first())?.n || 0;
+    if (!force && n < (ALERT_AT[kind] || 3)) return false;
+    const mark = await env.DB.prepare('SELECT last_at FROM alert_marks WHERE kind = ?').bind(kind).first();
+    if (!force && mark && t - mark.last_at < ALERT_REST) return false;
+    await env.DB.prepare('INSERT INTO alert_marks (kind, last_at) VALUES (?,?) ON CONFLICT(kind) DO UPDATE SET last_at = excluded.last_at').bind(kind, t).run();
+    const last = await env.DB.prepare('SELECT at, detail, ua FROM failures WHERE kind = ? ORDER BY at DESC LIMIT 3').bind(kind).all();
+    const lines = (last.results || []).map((r) => `${centralDateTime(r.at)} · ${r.detail || ''}${r.ua ? ` · ${r.ua}` : ''}`);
+    const label = FAILURE_LABEL[kind] || kind;
+    const site = env.SITE_URL || 'https://dedication.jetsonsjourney.com';
+    await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'alert',
+      subject: `Dedication Wall: ${label} is failing (${n} in the last hour)`,
+      text: `${label} failed ${n} time${n === 1 ? '' : 's'} in the last hour.\n\nLatest:\n${lines.join('\n')}\n\nAdmin: ${site}/admin\n\nNo more emails about this for six hours unless it is fixed and fails again.`,
+      html: `<p><strong>${escapeHtml(label)}</strong> failed ${n} time${n === 1 ? '' : 's'} in the last hour.</p><p>Latest:<br>${lines.map(escapeHtml).join('<br>')}</p><p><a href="${site}/admin">Admin</a></p><p>No more emails about this for six hours unless it is fixed and fails again.</p>` });
+    return true;
+  } catch (e) { console.error('alert', kind, String(e).slice(0, 120)); return false; }
+}
+// Record and, if it is time, email: one call for the handlers.
+export async function sense(env, kind, detail, meta) {
+  await failure(env, kind, detail, meta);
+  await alertIfNeeded(env, kind);
+}
+
 export async function sendMail(env, { to, subject, text, html: htmlBody, kind, entry_id = null, logTo = null }) {
   const from = env.MAIL_FROM || 'Every Dog Deserves a Dedication <hello@dedication.jetsonsjourney.com>';
   let status = 'dev', provider_id = null, detail = null;
@@ -113,6 +160,7 @@ export async function sendMail(env, { to, subject, text, html: htmlBody, kind, e
   }
   await env.DB.prepare('INSERT INTO notices (kind, to_email, entry_id, provider_id, status, sent_at, detail) VALUES (?,?,?,?,?,?,?)')
     .bind(kind, logTo || to, entry_id, provider_id, status, now(), detail).run();
+  if (status === 'failed') await failure(env, 'mail', `${kind}: ${detail || 'unknown'}`);
   return { status, provider_id };
 }
 
