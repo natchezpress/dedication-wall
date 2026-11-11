@@ -650,7 +650,7 @@ function startPolling() {
 // Ask for a sign-in link. The first send swaps the email form for a waiting panel; "Send it again" reuses
 // the same address after a 60-second cooldown (the server enforces one a minute, six a day per address).
 async function sendLink(email, { resend = false } = {}) {
-  const r = await fetch('/api/auth/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, next: '/#step-share' }) });
+  const r = await fetch('/api/auth/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, next: '/?signin=1#step-share' }) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.ok) throw new Error(j.error || String(r.status));
   track(resend ? 'link_resent' : 'link_sent');
@@ -678,13 +678,8 @@ function showWaiting(email, devLink, devCode) {
   $('#wait-email').textContent = email;
   $('#wait-code').value = '';
   $('#wait-code-status').textContent = '';
-  if (fromHomeScreen()) {
-    const hint = $('#wait-link-hint'), who = document.createElement('strong');
-    who.textContent = email;
-    hint.replaceChildren('Sent to ', who, '. Type the six-digit code from the email here; the link in it opens your browser instead of this app.');
-    $('#wait-code-label').textContent = 'The six-digit code from the email';
-    $('#wait-title').textContent = 'Check your email for a sign-in code. It works for 15 minutes.';
-  }
+  // From the home-screen icon the link can't work at all (it opens the browser, not this app).
+  if (fromHomeScreen()) $('#wait-link-hint').textContent = 'The link in the email opens your browser, not this app, so use the code here.';
   const st = $('#wait-status');
   if (devLink) st.innerHTML = `Test site: no email is sent. <a class="dev-link" href="${devLink}" target="_blank" rel="noopener">Open the sign-in link</a>, then come back here.${devCode ? ` Or type ${devCode}.` : ''}`;
   else st.textContent = '';
@@ -889,6 +884,14 @@ async function initPost() {
   if (post.config.signed_in) showSignedIn(post.config.signed_in);
   if (!$('#post-flow').hidden) cta.hidden = true;
   if (location.hash === '#step-share' || location.hash === '#step-post') setTimeout(() => settle($('#step-share')), 300);
+  // Arrived from the emailed link with nothing made in this browser: the dedication is wherever it was
+  // made (another browser, the home-screen app, another phone). Say so, instead of an empty maker.
+  if (new URLSearchParams(location.search).get('signin') && post.config.signed_in && !state.photo) {
+    $('#stranded').hidden = false;
+    track('signin_stranded');
+    setTimeout(() => settle($('#stranded')), 400);
+  }
+  if (location.search.includes('signin=')) history.replaceState(null, '', location.pathname + location.hash);
 }
 for (const id of ['#name', '#line']) $(id).addEventListener('input', saveDraft);
 $('#post-email').addEventListener('focus', () => trackOnce('post_started', { via: 'email' }));

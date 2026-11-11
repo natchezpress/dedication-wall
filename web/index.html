@@ -99,6 +99,10 @@
         <p class="actions-inline"><button type="button" class="button primary" id="fix-go" disabled>Replace the pictures</button></p>
         <p class="hint" id="fix-status" aria-live="polite"></p>
       </div>
+      <div class="post-flow" id="stranded" hidden>
+        <p class="flow-title">You’re signed in.</p>
+        <p class="hint">If you made your dedication in another browser or app, it’s still there: go back to it and type the six-digit code from the email. Or make it here; you won’t need to sign in again.</p>
+      </div>
       <div class="post-cta" id="post-cta" hidden>
         <button type="button" class="button primary" id="post-cta-btn">Put <span id="post-cta-dog">my dog</span> on the wall</button>
         <p class="hint">A page of their own on the Dedication Wall, with a link for friends and a heart they can leave. Free; take it down any time. Then share it to Instagram, Facebook or Messages, or save the picture.</p>
@@ -111,14 +115,14 @@
           <p class="hint" id="post-status"></p>
         </div>
         <div class="wait" id="post-wait" hidden>
-          <p class="wait-title" id="wait-title">Check your email for a sign-in link. It works for 15 minutes.</p>
-          <p class="hint">Don’t see it? Look in Promotions.</p>
-          <p class="hint" id="wait-link-hint">Sent to <strong id="wait-email"></strong>. Tap the link on this phone, then come back here; this page will notice.</p>
+          <p class="wait-title" id="wait-title">We emailed you a six-digit code. Type it here.</p>
+          <p class="hint">Sent to <strong id="wait-email"></strong>. It works for 15 minutes. Don’t see it? Look in Promotions.</p>
           <form class="code-row" id="wait-code-form" autocomplete="off">
-            <label class="field"><span id="wait-code-label">Or type the six-digit code from the email</span><input type="text" id="wait-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" placeholder="123456" /></label>
+            <label class="field"><span id="wait-code-label">Six-digit code</span><input type="text" id="wait-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" placeholder="123456" /></label>
             <button type="submit" class="button primary" id="wait-code-go">Sign in</button>
           </form>
           <p class="hint" id="wait-code-status"></p>
+          <p class="hint" id="wait-link-hint">The email has a sign-in link too. It works only on this phone, in this same browser; this page will notice.</p>
           <p class="actions-inline"><button type="button" class="button quiet" id="wait-resend" disabled>Send it again</button> <button type="button" class="button quiet" id="wait-change">Use a different email</button></p>
           <p class="hint" id="wait-status"></p>
         </div>
