@@ -40,7 +40,10 @@ export default {
       if (p === '/api/auth/link' && request.method === 'POST') return authLink(env, request, url);
       if (p === '/api/auth/verify' && request.method === 'GET') return authVerify(env, request, url);
       if (p === '/api/auth/code' && request.method === 'POST') return authCode(env, request, url);
-      if (p === '/api/auth/logout') return new Response(null, { status: 302, headers: { location: '/', 'set-cookie': 'dw_session=; Path=/; Max-Age=0' } });
+      if (p === '/api/auth/logout') {
+        const back = url.searchParams.get('next') || '/';
+        return new Response(null, { status: 302, headers: { location: /^\/(?!\/)/.test(back) ? back : '/', 'set-cookie': 'dw_session=; Path=/; Max-Age=0' } });
+      }
       if (p === '/api/post' && request.method === 'POST') return post(env, request, ctx);
       if (p === '/api/mine' && request.method === 'GET') return mine(env, request);
       if (p === '/api/remove' && request.method === 'GET') return removeConfirm(env, request);
@@ -676,13 +679,54 @@ async function requestBackground(env, request) {
 // ---------------------------------------------------------------- admin (token in header or ?token=, then cookie)
 // With no ADMIN_TOKEN set, a DEV_MODE deployment (local, branch previews) accepts "dev"; production never does.
 const adminToken = (env) => env.ADMIN_TOKEN || (devMode(env) ? 'dev' : null);
+// The wall's contact address is the admin (11/12: Brock wanted /admin on his phone without the token).
+// Signing in there with the emailed six-digit code, like any poster, opens /admin; the token still works.
+const adminEmail = (env) => String(env.ADMIN_EMAIL || env.CONTACT_EMAIL || '').trim().toLowerCase();
+
 async function adminAuth(env, request, url) {
   const tok = adminToken(env);
-  if (!tok) return false;
-  const t = request.headers.get('x-admin-token') || url.searchParams.get('token');
-  if (t && t === tok) return true;
-  const m = /(?:^|;\s*)dw_admin=([^;]+)/.exec(request.headers.get('cookie') || '');
-  return !!(m && m[1] === (await sha256(`${tok}|admin`)));
+  if (tok) {
+    const t = request.headers.get('x-admin-token') || url.searchParams.get('token');
+    if (t && t === tok) return true;
+    const m = /(?:^|;\s*)dw_admin=([^;]+)/.exec(request.headers.get('cookie') || '');
+    if (m && m[1] === (await sha256(`${tok}|admin`))) return true;
+  }
+  const who = await readSession(secret(env), request.headers.get('cookie'));
+  return !!(who && adminEmail(env) && who.email === adminEmail(env));
+}
+
+// /admin for anyone not signed in as the admin: the same email-and-code sign-in the maker uses.
+async function adminSignInPage(env, request) {
+  const who = await readSession(secret(env), request.headers.get('cookie'));
+  const other = who ? `<p class="small">You’re signed in as ${h(who.email)}, which isn’t the admin account. <a href="/api/auth/logout?next=/admin">Sign out</a> first.</p>` : '';
+  const bodyHtml = `${other}
+<p>Sign in with the wall’s admin email. We’ll send a six-digit code.</p>
+<form id="a-ask"><p><label>Email <input type="email" id="a-email" autocomplete="email" required style="width:100%;max-width:340px"></label></p><p><button class="btn" type="submit">Email me a code</button></p></form>
+<form id="a-code" hidden><p><label>Six-digit code <input type="text" id="a-digits" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" style="width:10em;font-size:20px;letter-spacing:.15em"></label></p><p><button class="btn" type="submit">Sign in</button></p></form>
+<p class="small" id="a-status" aria-live="polite"></p>
+<script>
+const st = document.getElementById('a-status');
+document.getElementById('a-ask').addEventListener('submit', async (e) => {
+  e.preventDefault(); st.textContent = 'Sending…';
+  const email = document.getElementById('a-email').value.trim();
+  const r = await fetch('/api/auth/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, next: '/admin' }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) { st.textContent = j.error || ('Couldn’t send (' + r.status + ').'); return; }
+  document.getElementById('a-ask').hidden = true; document.getElementById('a-code').hidden = false;
+  st.textContent = j.dev_code ? 'Test site: the code is ' + j.dev_code + '.' : 'Check your email for the code. It works for 15 minutes.';
+  document.getElementById('a-digits').focus();
+});
+document.getElementById('a-code').addEventListener('submit', async (e) => {
+  e.preventDefault(); st.textContent = 'Checking…';
+  const email = document.getElementById('a-email').value.trim(), code = document.getElementById('a-digits').value.trim();
+  const r = await fetch('/api/auth/code', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, code }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) { st.textContent = j.error || ('Couldn’t check the code (' + r.status + ').'); return; }
+  location.replace('/admin');
+});
+document.getElementById('a-digits').addEventListener('input', (e) => { if (e.target.value.replace(/\D/g, '').length === 6) document.getElementById('a-code').requestSubmit(); });
+</script>`;
+  return html(simplePage({ title: 'Admin', bodyHtml, noindex: true }), 401, { 'x-robots-tag': 'noindex, nofollow' });
 }
 
 // Fixing a post's pictures from /admin: the maker reopens the post (/?fix=<id>) with the owner's own photo,
@@ -812,9 +856,7 @@ async function admin(env, request, url) {
 }
 
 async function adminPage(env, request, url) {
-  if (!(await adminAuth(env, request, url))) {
-    return html(simplePage({ title: 'Admin', bodyHtml: '<p>Admin token needed. Open this page with <code>?token=…</code> once; a cookie keeps you signed in.</p>', noindex: true }), 401, { 'x-robots-tag': 'noindex, nofollow' });
-  }
+  if (!(await adminAuth(env, request, url))) return adminSignInPage(env, request);
   const headers = { 'x-robots-tag': 'noindex, nofollow' };
   if (url.searchParams.get('token')) headers['set-cookie'] = `dw_admin=${await sha256(`${adminToken(env)}|admin`)}; Path=/; Max-Age=${90 * 86400}; HttpOnly; SameSite=Lax; Secure`;
   const s = await settings(env);
