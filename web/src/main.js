@@ -78,6 +78,7 @@ function draw() {
     const cssW = preview.clientWidth || 280, cssH = cssW * 16 / 9;
     if (preview.width !== Math.round(cssW * dpr)) { preview.width = Math.round(cssW * dpr); preview.height = Math.round(cssH * dpr); }
     pctx.drawImage(master, 0, 0, preview.width, preview.height);
+    updateStartOver();
   });
 }
 
@@ -576,9 +577,10 @@ async function idbDel(key) {
   try { const db = await idb(); await new Promise((res) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').delete(key); t.oncomplete = res; t.onerror = res; }); } catch { /* ignore */ }
 }
 let draftTimer = 0;
+let wiping = false; // set by Start over, so leaving the page doesn't save the draft straight back
 function saveDraftNow() {
   clearTimeout(draftTimer);
-  if (FIX) return;
+  if (FIX || wiping) return;
   try {
     localStorage.setItem(DRAFT_KEY, JSON.stringify({ mode: state.mode, name: state.name, line: state.line, bg: state.bg?.id, bgChosen: state.bgChosen, layout: state.layout, cutout: cutoutOn(), view: state.photo?.view || null, t: Date.now() }));
   } catch { /* no storage */ }
@@ -613,6 +615,32 @@ async function restoreDraft() {
   if (cutoutOn() && state.photo) requestCutout();
 }
 function clearDraft() { try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } idbDel('photo'); }
+
+// ---------- start over ----------
+// Shown once anything is filled in (11/12: Brock's browser still held Tuesday's test dog). One tap arms
+// it, a second within four seconds clears the saved draft and photo and reloads the maker empty. A
+// sign-in is kept; only the dedication goes.
+function updateStartOver() {
+  const btn = $('#start-over');
+  if (!btn) return;
+  btn.hidden = !!FIX || !!post.url || !(state.photo || state.name.trim() || state.line.trim());
+}
+let armTimer = 0;
+$('#start-over').addEventListener('click', async () => {
+  const btn = $('#start-over');
+  if (!btn.classList.contains('armed')) {
+    btn.classList.add('armed'); btn.textContent = 'Tap again to clear everything';
+    clearTimeout(armTimer);
+    armTimer = setTimeout(() => { btn.classList.remove('armed'); btn.textContent = 'Start over'; }, 4000);
+    return;
+  }
+  clearTimeout(armTimer);
+  wiping = true; clearTimeout(draftTimer);
+  try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+  await idbDel('photo');
+  track('start_over');
+  location.replace(location.pathname);
+});
 
 const post = { config: null, email: '', poll: 0, url: '' };
 const postStatus = (t, html = false) => { const el = $('#post-status'); if (html) el.innerHTML = t; else el.textContent = t; };
