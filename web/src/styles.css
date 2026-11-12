@@ -127,6 +127,8 @@ textarea { resize: vertical; }
 .done p { margin: 0 0 10px; }
 .done-title { font-size: 22px; }
 .actions-inline { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.start-over { margin-left: auto; background: none; border: 0; padding: 4px 0; font: inherit; font-size: 15px; color: var(--muted, #6f665d); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.start-over.armed { color: #9a2b1f; font-weight: 600; }
 .code-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-top: 14px; }
 .code-row .field { flex: 1 1 180px; margin: 0; }
 .code-row input { font-size: 22px; letter-spacing: 0.18em; font-variant-numeric: tabular-nums; }
