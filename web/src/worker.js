@@ -530,12 +530,17 @@ async function photo(env, request, rest) {
   if (!m) return new Response('not found', { status: 404 });
   const e = await env.DB.prepare('SELECT status, owner_email, story_key, feed_key, card_key FROM entries WHERE id = ?').bind(m[1]).first();
   if (!e) return new Response('not found', { status: 404 });
-  if (e.status !== 'live') {
-    // the owner may preview a pending entry's images (signed key or session); nobody else
-    const k = new URL(request.url).searchParams.get('k') || '';
-    let owner = e.status === 'pending' && k && k === (await inviteKey(env, m[1]));
-    if (!owner && e.status === 'pending') { const sess = await requireSession(env, request); owner = !!(sess && sess.email === e.owner_email); }
-    if (!owner) return new Response('not found', { status: 404 });
+  const notLive = e.status !== 'live';
+  if (notLive) {
+    // The owner may preview a pending entry's images (signed key or session), and the admin may see any
+    // entry's, so a post held by the screener can be judged before deciding (11/12: the queue showed no
+    // picture until the post was published). Nobody else.
+    const url = new URL(request.url);
+    const k = url.searchParams.get('k') || '';
+    let allowed = e.status === 'pending' && k && k === (await inviteKey(env, m[1]));
+    if (!allowed && e.status === 'pending') { const sess = await requireSession(env, request); allowed = !!(sess && sess.email === e.owner_email); }
+    if (!allowed && e.status !== 'removed') allowed = await adminAuth(env, request, url);
+    if (!allowed) return new Response('not found', { status: 404 });
   }
   const key = { story: e.story_key, feed: e.feed_key, card: e.card_key }[m[2]];
   const obj = await env.PHOTOS.get(key);
@@ -543,7 +548,9 @@ async function photo(env, request, rest) {
   const headers = new Headers();
   obj.writeHttpMetadata(headers);
   headers.set('etag', obj.httpEtag);
-  headers.set('cache-control', 'public, max-age=86400');
+  // A picture that isn't on the wall is never kept by a shared cache.
+  headers.set('cache-control', notLive ? 'private, no-store' : 'public, max-age=86400');
+  if (notLive) headers.set('x-robots-tag', 'noindex');
   return new Response(obj.body, { headers });
 }
 
@@ -860,7 +867,7 @@ async function adminPage(env, request, url) {
   const headers = { 'x-robots-tag': 'noindex, nofollow' };
   if (url.searchParams.get('token')) headers['set-cookie'] = `dw_admin=${await sha256(`${adminToken(env)}|admin`)}; Path=/; Max-Age=${90 * 86400}; HttpOnly; SameSite=Lax; Secure`;
   const s = await settings(env);
-  const { results: queue } = await env.DB.prepare('SELECT id, dog_name, line, mode, owner_email, screen_result, created_at, is_test FROM entries WHERE status = \'pending\' ORDER BY created_at ASC LIMIT 50').all();
+  const { results: queue } = await env.DB.prepare('SELECT id, dog_name, line, mode, owner_email, screen_result, created_at, is_test, card_key, story_key FROM entries WHERE status = \'pending\' ORDER BY created_at ASC LIMIT 50').all();
   const { results: reqs } = await env.DB.prepare('SELECT id, text, email, created_at FROM requests WHERE status = \'new\' ORDER BY created_at DESC LIMIT 50').all();
   const { results: liveRows } = await env.DB.prepare('SELECT id, dog_name, line, owner_email, hearts, live_at, is_test FROM entries WHERE status = \'live\' ORDER BY live_at DESC LIMIT 50').all();
   const { results: counts } = await env.DB.prepare('SELECT status, COUNT(*) AS n FROM entries GROUP BY status').all();
@@ -872,7 +879,7 @@ async function adminPage(env, request, url) {
     ORDER BY o.link_sent_at DESC LIMIT 30`).bind(now() - 7 * 86400).all();
   const body = `
 <h2>Queue (${queue.length})</h2>
-${queue.length ? queue.map((e) => `<div class="dotd" style="grid-template-columns:120px 1fr"><img src="/p/${h(e.id)}/card.jpg" onerror="this.style.visibility='hidden'" alt="" /><div><strong>${h(e.dog_name)}</strong> · ${e.mode === 'in_memory' ? 'In memory' : 'To'} · ${h(e.owner_email)}${e.is_test ? ' · TEST' : ''}<br><em>${h(e.line)}</em><br><span class="small">${h(e.screen_result || 'not screened yet')}</span><div class="row"><button class="btn" onclick="decide('${h(e.id)}','live')">Publish</button><button class="btn quiet" onclick="decide('${h(e.id)}','rejected')">Reject</button><a class="btn quiet" href="/?fix=${h(e.id)}">Fix pictures</a></div></div></div>`).join('') : '<p class="small">Nothing waiting.</p>'}
+${queue.length ? queue.map((e) => `<div class="dotd" style="grid-template-columns:120px 1fr"><a href="/p/${h(e.id)}/story.jpg${picV(e.story_key) ? `?v=${picV(e.story_key)}` : ''}" target="_blank" rel="noopener" title="Open the full picture"><img src="/p/${h(e.id)}/card.jpg${picV(e.card_key) ? `?v=${picV(e.card_key)}` : ''}" onerror="this.closest('a').replaceWith(Object.assign(document.createElement('span'),{className:'small',textContent:'Picture missing'}))" alt="${h(e.dog_name)}" style="width:100%;display:block" /><span class="small" style="display:block;margin-top:4px">Tap for the full picture</span></a><div><strong>${h(e.dog_name)}</strong> · ${e.mode === 'in_memory' ? 'In memory' : 'To'} · ${h(e.owner_email)}${e.is_test ? ' · TEST' : ''}<br><em>${h(e.line)}</em><br><span class="small">${h(e.screen_result || 'not screened yet')}</span><div class="row"><button class="btn" onclick="decide('${h(e.id)}','live')">Publish</button><button class="btn quiet" onclick="decide('${h(e.id)}','rejected')">Reject</button><a class="btn quiet" href="/?fix=${h(e.id)}">Fix pictures</a></div></div></div>`).join('') : '<p class="small">Nothing waiting.</p>'}
 <h2>On the wall (${liveRows.length})</h2>
 ${liveRows.length ? `<ul class="small">${liveRows.map((e) => `<li><a href="/d/${h(e.id)}">${h(e.dog_name)}</a> · <em>${h(e.line)}</em> · ${h(e.owner_email)} · ♥ ${e.hearts} · ${h(centralDateTime(e.live_at))}${e.is_test ? ' · TEST' : ''} · <a class="btn quiet" style="padding:4px 10px;font-size:13px" href="/?fix=${h(e.id)}">Fix pictures</a> · <button class="btn quiet" style="padding:4px 10px;font-size:13px" onclick="takeDown('${h(e.id)}','${h(e.dog_name).replace(/'/g, '&#39;')}')">Take down</button></li>`).join('')}</ul>` : '<p class="small">Nothing live.</p>'}
 <h2>Started but didn’t post (${stalled.length})</h2>
