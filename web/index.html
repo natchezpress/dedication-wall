@@ -30,8 +30,9 @@
        sits on a cream medallion with a thin gold rim, and the medallion turns twice like a coin (11/13: “spin one more time”), the other way
        round and at one steady speed, slowly (4 seconds a turn, flatter perspective so it doesn't whip past edge-on), there from the first moment (11/13), with a glint of light, in real 3D on a plain box (which every
        phone turns); it stops facing front, holds a beat, and fades into the maker. It plays on each launch
-       from the home-screen icon (the manifest opens /?utm_source=homescreen…), and on any page with
-       ?splash=1, for trying it in a browser. The cream matches the manifest's background, so it follows the
+       from the home-screen icon (the manifest opens /?utm_source=homescreen…), once per browser session on
+       a computer (11/13: a mouse or trackpad; phones in the browser still skip it), and on any page with
+       ?splash=1, for trying it anywhere. The cream matches the manifest's background, so it follows the
        phone's own launch screen without a flash. -->
   <style>
     #splash { position: fixed; inset: 0; z-index: 9999; display: none; align-items: center; justify-content: center; background: #f7f1e6; pointer-events: none; }
@@ -56,9 +57,11 @@
         var q = location.search, force = /[?&]splash=1\b/.test(q);
         var app = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
         var launch = /[?&]utm_source=homescreen\b/.test(q);
+        // A computer: a mouse or trackpad that can hover. Phones and tablets in the browser don't match.
+        var computer = !!(window.matchMedia && matchMedia('(hover: hover) and (pointer: fine)').matches);
         var seen = false;
         try { seen = sessionStorage.getItem('dw_splash') === '1'; } catch (e) { /* private mode */ }
-        if (!force && !(app && (launch || !seen))) return;
+        if (!force && !(app && (launch || !seen)) && !(computer && !seen)) return;
         try { sessionStorage.setItem('dw_splash', '1'); } catch (e) { /* private mode */ }
         var root = document.documentElement;
         root.classList.add('splash');
