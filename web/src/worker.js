@@ -354,16 +354,34 @@ async function deletePhotos(env, e) {
   catch (err) { console.error('photo delete', e.id, err); }
 }
 
+// Putting the wall on a phone, for emails (which can't tell the phone or browser, so each gets its two
+// steps). 11/13: iOS 26 Safari hides Share under ••• next to the address; Chrome on iPhone keeps Share in
+// the address bar; Android Chrome puts it under ⋮.
+function homeStepsText(env) {
+  return `Open ${site(env)} on your phone, then:
+iPhone, Safari: 1. Tap ••• next to the address, then Share. 2. Tap Add to Home Screen, then Add.
+iPhone, Chrome: 1. Tap the Share icon at the top right of the address bar. 2. Tap Add to Home Screen, then Add.
+Android: 1. Tap ⋮ at the top right. 2. Tap Add to Home screen.
+Then open the Dedication Wall from its new icon and tap Turn on to get the Dog of the Day each morning at 9, your time.`;
+}
+function homeStepsHtml(env, src) {
+  const open = `${site(env)}/?utm_source=${src}&utm_medium=email&utm_campaign=ops-57`;
+  return `<p style="margin:0 0 6px"><a href="${open}">Open the wall on your phone</a>, then:</p>
+<p style="margin:0 0 6px"><strong>iPhone, Safari:</strong> 1. Tap ••• next to the address, then Share. 2. Tap Add to Home Screen, then Add.<br>
+<strong>iPhone, Chrome:</strong> 1. Tap the Share icon at the top right of the address bar. 2. Tap Add to Home Screen, then Add.<br>
+<strong>Android:</strong> 1. Tap ⋮ at the top right. 2. Tap Add to Home screen.</p>
+<p style="margin:0">Then open the Dedication Wall from its new icon and tap <strong>Turn on</strong> to get the Dog of the Day each morning at 9, your time.</p>`;
+}
+
 async function notifyLive(env, e) {
   const page = `${site(env)}/d/${e.id}`;
   const inviteUrl = `${site(env)}/i/${e.invite_code}?utm_source=share&utm_medium=referral&utm_campaign=ops-57`;
   const inviteForm = `${page}?k=${await inviteKey(env, e.id)}`;
   const removeUrl = `${site(env)}/api/remove?id=${e.id}&key=${await sha256(`${secret(env)}|remove|${e.id}`)}`;
-  const homeUrl = `${site(env)}/?utm_source=live-email&utm_medium=email&utm_campaign=ops-57`;
   await sendMail(env, { to: e.owner_email, kind: 'live', entry_id: e.id,
     subject: `${e.dog_name} is on the wall`,
-    text: `${e.dog_name}’s dedication is live:\n${page}\n\nShare this link so friends can see it and leave a heart:\n${inviteUrl}\n\nInvite up to five friends by email (we send one short note and keep no addresses):\n${inviteForm}\n\nKeep the wall on your phone. Add it to your home screen so you can easily come back and visit the Dedication Wall, and see who’s new. Open ${site(env)} on your phone, then:\niPhone: tap Share, then Add to Home Screen.\nAndroid: tap ⋮, then Add to Home screen.\n\nTo take it down at any time:\n${removeUrl}`,
-    html: branded(env, `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p><strong>Keep the wall on your phone.</strong> Add it to your home screen so you can easily come back and visit the Dedication Wall, and see who’s new. <a href="${homeUrl}">Open the wall on your phone</a>, then:<br><strong>iPhone:</strong> tap Share, then Add to Home Screen.<br><strong>Android:</strong> tap ⋮, then Add to Home screen.</p><p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>`) });
+    text: `${e.dog_name}’s dedication is live:\n${page}\n\nShare this link so friends can see it and leave a heart:\n${inviteUrl}\n\nInvite up to five friends by email (we send one short note and keep no addresses):\n${inviteForm}\n\nKeep the wall on your phone, so you can easily come back, see who’s new, and meet the Dog of the Day each morning. ${homeStepsText(env)}\n\nTo take it down at any time:\n${removeUrl}`,
+    html: branded(env, `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p><strong>Keep the wall on your phone</strong>, so you can easily come back, see who’s new, and meet the Dog of the Day each morning.</p>${homeStepsHtml(env, 'live-email')}<p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>`) });
 }
 
 // ---------------------------------------------------------------- evening notes (hearts and new dogs)
@@ -386,7 +404,7 @@ async function eveningNotes(env, ts = Date.now()) {
   if (pending && hour >= NOTE_CATCHUP[0] && hour < NOTE_CATCHUP[1]) kind = 'catchup';
   else if (hour >= NOTE_EVENING[0] && hour < NOTE_EVENING[1]) kind = 'daily';
   if (!kind) return [];
-  const { results: owners } = await env.DB.prepare(`SELECT email, mail_key, news_at FROM owners
+  const { results: owners } = await env.DB.prepare(`SELECT email, mail_key, news_at, told_morning FROM owners
     WHERE heart_mail_off = 0 AND (heart_mail_day IS NULL OR heart_mail_day != ?)
       AND EXISTS (SELECT 1 FROM entries WHERE owner_email = owners.email AND status = 'live' AND is_test = 0)
     ORDER BY email`).bind(day).all();
@@ -409,13 +427,14 @@ async function eveningNotes(env, ts = Date.now()) {
         key = (await sha256(`${secret(env)}|hearts|${o.email}`)).slice(0, 32);
         await env.DB.prepare('UPDATE owners SET mail_key = ? WHERE email = ?').bind(key, o.email).run();
       }
-      const m = noteBody(env, { kind, dogs, news, key, mine });
+      const m = noteBody(env, { kind, dogs, news, key, mine, tell: kind === 'daily' && !o.told_morning });
       await env.DB.prepare('UPDATE owners SET heart_mail_day = ? WHERE email = ?').bind(day, o.email).run();
       const r = await sendMail(env, { to: o.email, kind: 'hearts', entry_id: (dogs[0] || mine[0]).id, subject: m.subject, text: m.text, html: m.html,
         headers: { 'List-Unsubscribe': `<${m.off}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } });
       if (r.status !== 'failed') {
         const done = dogs.map((d) => env.DB.prepare('UPDATE entries SET hearts_mailed = ? WHERE id = ? AND hearts_mailed < ?').bind(d.hearts, d.id, d.hearts));
         if (kind === 'daily') done.push(env.DB.prepare('UPDATE owners SET news_at = ? WHERE email = ?').bind(at, o.email));
+        if (kind === 'daily' && !o.told_morning) done.push(env.DB.prepare('UPDATE owners SET told_morning = 1 WHERE email = ?').bind(o.email));
         if (done.length) await env.DB.batch(done);
       }
       out.push({ to: o.email, status: r.status, subject: m.subject, text: m.text, html: m.html });
@@ -427,7 +446,8 @@ async function eveningNotes(env, ts = Date.now()) {
   return out;
 }
 
-function noteBody(env, { kind, dogs, news, key, mine = dogs }) {
+// tell: open with the one-time "New: the Dog of the Day on your phone" section (once per owner).
+function noteBody(env, { kind, dogs, news, key, mine = dogs, tell = false }) {
   const src = kind === 'catchup' ? 'heart-catchup' : 'heart-email';
   const utm = (s) => `utm_source=${s}&utm_medium=email&utm_campaign=ops-57`;
   const off = `${site(env)}/api/hearts?k=${key}`;
@@ -507,6 +527,10 @@ function noteBody(env, { kind, dogs, news, key, mine = dogs }) {
     inner += `<p style="margin-bottom:8px">${head}</p>${grid(shown.map((e) => ({ e, href: page(e), label: label(e) })))}`
       + `<p style="margin-top:0">${h(tap)}${extra ? ` And ${extra} more on the wall.` : ''}</p>`
       + `<p>${btn(wall, 'See the whole wall')}</p>`;
+  }
+  if (tell) {
+    text = `New: the Dog of the Day on your phone. Each morning at 9, your time, one notification with that day’s dog. Put the wall on your phone in two steps.\n${homeStepsText(env)}\n\n${text}`;
+    inner = `<div style="background:#fffaf2;border:1px solid #e3d8c6;border-radius:14px;padding:14px 16px;margin:0 0 20px;font-size:15px;line-height:1.5"><p style="margin:0 0 8px;font-size:17px"><strong>New: the Dog of the Day on your phone.</strong> Each morning at 9, your time, one notification with that day’s dog. Put the wall on your phone in two steps.</p>${homeStepsHtml(env, 'news-push')}</div>${inner}`;
   }
   return { subject, text: text + foot, html: wrap(inner), off };
 }
@@ -972,7 +996,8 @@ async function heart(env, request) {
     const n = (await env.DB.prepare('SELECT hearts FROM entries WHERE id = ?').bind(id).first()).hearts;
     return json({ ok: true, hearts: n, counted: !!r.meta.changes });
   }
-  return Response.redirect(`${site(env)}/d/${id}`, 303);
+  // A fresh address, so the phone doesn't show its saved (un-hearted) copy of the page from a minute ago.
+  return Response.redirect(`${site(env)}/d/${id}?hearted=1`, 303);
 }
 
 // ---------------------------------------------------------------- word help

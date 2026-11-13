@@ -857,9 +857,20 @@ window.addEventListener('appinstalled', () => {
   $('#home-install').hidden = true;
   $('#home-steps').textContent = 'Added. Look for Jetson on your home screen.';
 });
+// The steps for the browser in hand. 11/13: iOS 26 Safari hides Share under ••• next to the address;
+// Chrome on iPhone keeps Share in the address bar; the browsers inside other apps can't add to the home
+// screen, and Firefox and Edge on iPhone are better sent to Safari.
+function iosSteps() {
+  const ua = navigator.userAgent || '';
+  if (/FBAN|FBAV|FB_IAB|Instagram|Line\/|GSA\/|Snapchat|Pinterest|LinkedInApp/.test(ua)) return 'First open this page in Safari (tap ••• or the compass, then Open in Safari). Then tap ••• next to the address, then Share, then Add to Home Screen.';
+  if (/CriOS/.test(ua)) return 'Tap the Share icon at the top right of the address bar, then Add to Home Screen, then Add.';
+  if (/FxiOS|EdgiOS|OPiOS|DuckDuckGo/.test(ua)) return 'Open this page in Safari, tap ••• next to the address, then Share, then Add to Home Screen.';
+  const v = Number((/Version\/(\d+)/.exec(ua) || [])[1] || 0);
+  return v >= 26 ? 'Tap ••• next to the address, then Share, then Add to Home Screen, then Add.' : 'Tap Share (the square with the arrow), then Add to Home Screen, then Add.';
+}
 const HOME_STEPS = {
-  ios: 'Tap Share, then Add to Home Screen.',
-  android: 'Tap ⋮, then Add to Home screen.',
+  get ios() { return iosSteps(); },
+  android: 'Tap ⋮ at the top right, then Add to Home screen.',
 };
 function showHomeKeep() {
   if (!phone || fromHomeScreen()) return;
