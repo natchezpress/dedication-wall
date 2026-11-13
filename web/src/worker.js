@@ -4,7 +4,7 @@
 import {
   now, centralDay, centralHour, centralDateTime, shortId, tokenHex, sha256, makeSession, readSession, sessionCookie,
   json, html, bad, escapeHtml as h, validEmail, visitorHash, sendMail, screen, suggestLines,
-  failure, alertIfNeeded, sense, FAILURE_LABEL, anthropic, uaFamily, newVapidKeys, encryptPush, sendPush,
+  failure, alertIfNeeded, sense, FAILURE_LABEL, anthropic, uaFamily, newVapidKeys, encryptPush, sendPush, validZone,
 } from './lib.js';
 import { wallPage, dogPage, simplePage, notFoundPage, picV } from './pages.js';
 
@@ -706,23 +706,29 @@ async function dogOfTheDay(env, day = centralDay()) {
 const centralTomorrow = (ts = Date.now()) => centralDay(ts + 26 * 3600 * 1000 - centralHour(ts) * 3600 * 1000);
 
 // ---------------------------------------------------------------- the morning: Dog of the Day goes out
-// At the 9 and 10 a.m. Central ticks: the dog's person gets one email (the dog's picture and a one-tap
-// share), and every phone that turned on morning notes gets one notification. Each is claimed before it
-// sends, so a repeated tick never sends twice; a deploy after 11 starts the next morning.
-const MORNING = [9, 11];        // Central hours: from, up to (not including)
+// The dog's person gets one email at the 9 or 10 a.m. Central tick (the dog's picture and a one-tap
+// share). Phones get their notification at 9 a.m. their own time (11/13: people could be anywhere), so
+// every tick checks which time zones have just reached 9, with 10 as the retry. Whatever is Dog of the Day
+// on the wall at that moment is the one they hear about. Each send is claimed first, so a repeated tick
+// never sends twice; a deploy after 11 starts the next morning.
+const MORNING = [9, 11];        // local hours: from, up to (not including)
+const HOME_TZ = 'America/Chicago';
 const PUSH_PER_TICK = 30;       // phones per tick, well inside a Worker's outbound-request allowance
 const DOTD_MAIL_GAP = 30 * 86400; // a dog's person hears "Dog of the Day" at most once a month
 
 async function morning(env, ts = Date.now()) {
+  const out = { mail: null, push: null };
   const hour = centralHour(ts);
-  if (hour < MORNING[0] || hour >= MORNING[1]) return null;
-  const day = centralDay(ts);
-  const e = await dogOfTheDay(env, day);
-  if (!e) return null;
-  const out = { day, dog: e.dog_name, mail: null, push: null };
-  const claim = await env.DB.prepare('UPDATE dotd_log SET mailed_at = ? WHERE day = ? AND mailed_at IS NULL').bind(now(), day).run();
-  if (claim.meta.changes) out.mail = await dotdOwnerMail(env, e, day);
-  out.push = await pushMorning(env, e, day);
+  if (hour >= MORNING[0] && hour < MORNING[1]) {
+    const day = centralDay(ts);
+    const e = await dogOfTheDay(env, day);
+    if (e) {
+      Object.assign(out, { day, dog: e.dog_name });
+      const claim = await env.DB.prepare('UPDATE dotd_log SET mailed_at = ? WHERE day = ? AND mailed_at IS NULL').bind(now(), day).run();
+      if (claim.meta.changes) out.mail = await dotdOwnerMail(env, e, day);
+    }
+  }
+  out.push = await pushMorning(env, ts);
   return out;
 }
 
@@ -818,11 +824,28 @@ async function pushOne(env, sub, payload, v) {
   return status;
 }
 
-async function pushMorning(env, e, day) {
-  const { results: subs } = await env.DB.prepare('SELECT endpoint, p256dh, auth FROM push_subs WHERE last_day IS NULL OR last_day != ? LIMIT ?').bind(day, PUSH_PER_TICK).all();
+async function pushMorning(env, ts) {
+  // Which phones' time zones are at 9 (or 10) right now? Phones that never told us count as Central.
+  const { results: zones } = await env.DB.prepare('SELECT DISTINCT COALESCE(tz, ?) AS tz FROM push_subs').bind(HOME_TZ).all();
+  const due = [];
+  for (const z of zones) {
+    const tz = validZone(z.tz) || HOME_TZ;
+    const hour = centralHour(ts, tz);
+    if (hour >= MORNING[0] && hour < MORNING[1]) due.push({ tz: z.tz, day: centralDay(ts, tz) });
+  }
+  if (!due.length) return { sent: 0 };
+  const e = await dogOfTheDay(env, centralDay(ts));
+  if (!e) return { sent: 0 };
+  const subs = [];
+  for (const z of due) {
+    if (subs.length >= PUSH_PER_TICK) break;
+    const { results } = await env.DB.prepare('SELECT endpoint, p256dh, auth FROM push_subs WHERE COALESCE(tz, ?) = ? AND (last_day IS NULL OR last_day != ?) LIMIT ?')
+      .bind(HOME_TZ, z.tz, z.day, PUSH_PER_TICK - subs.length).all();
+    for (const r of results) subs.push({ ...r, day: z.day });
+  }
   if (!subs.length) return { sent: 0 };
-  // Claim the batch for today first: a phone gets at most one try a morning.
-  await env.DB.batch(subs.map((x) => env.DB.prepare('UPDATE push_subs SET last_day = ? WHERE endpoint = ?').bind(day, x.endpoint)));
+  // Claim the batch first: a phone gets at most one try a morning (its own morning).
+  await env.DB.batch(subs.map((x) => env.DB.prepare('UPDATE push_subs SET last_day = ? WHERE endpoint = ?').bind(x.day, x.endpoint)));
   const v = await vapid(env);
   const line = e.line.length > 110 ? `${e.line.slice(0, 107).trimEnd()}…` : e.line;
   const payload = {
@@ -832,7 +855,7 @@ async function pushMorning(env, e, day) {
   };
   const tally = {};
   for (const x of subs) { const st = await pushOne(env, x, payload, v); tally[st] = (tally[st] || 0) + 1; }
-  return { sent: subs.length, tally };
+  return { sent: subs.length, dog: e.dog_name, zones: due.map((z) => z.tz), tally };
 }
 
 async function pushKey(env) {
@@ -843,19 +866,20 @@ async function pushKey(env) {
 async function pushSubscribe(env, request, ctx) {
   const b = await request.json().catch(() => ({}));
   const endpoint = String(b.endpoint || ''), p256dh = String(b.keys?.p256dh || ''), auth = String(b.keys?.auth || '');
+  const tz = validZone(b.tz);
   let u = null;
   try { u = new URL(endpoint); } catch { /* not a URL */ }
   if (!u || u.protocol !== 'https:' || !PUSH_HOSTS.test(u.hostname) || endpoint.length > 1000) return bad('not a push service address');
   if (!/^[A-Za-z0-9_-]{80,100}$/.test(p256dh) || !/^[A-Za-z0-9_-]{16,32}$/.test(auth)) return bad('push keys needed');
   const known = await env.DB.prepare('SELECT 1 FROM push_subs WHERE endpoint = ?').bind(endpoint).first();
   if (!known && (await env.DB.prepare('SELECT COUNT(*) AS n FROM push_subs').first()).n >= 20000) return bad('full', 503);
-  await env.DB.prepare('INSERT INTO push_subs (endpoint, p256dh, auth, created_at, ua) VALUES (?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, fails = 0')
-    .bind(endpoint, p256dh, auth, now(), uaFamily(request.headers.get('user-agent') || '')).run();
+  await env.DB.prepare('INSERT INTO push_subs (endpoint, p256dh, auth, created_at, ua, tz) VALUES (?,?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, fails = 0, tz = COALESCE(excluded.tz, push_subs.tz)')
+    .bind(endpoint, p256dh, auth, now(), uaFamily(request.headers.get('user-agent') || ''), tz).run();
   // A brand-new phone gets a hello right away, so the person sees it works.
   if (!known && b.welcome) {
     ctx.waitUntil((async () => {
       const v = await vapid(env);
-      await pushOne(env, { endpoint, p256dh, auth }, { title: 'You’re set', body: 'Tomorrow at 9: the Dog of the Day. One note a morning, nothing else.', tag: 'welcome', url: '/wall?utm_source=push&utm_medium=push&utm_campaign=ops-57' }, v);
+      await pushOne(env, { endpoint, p256dh, auth }, { title: 'You’re set', body: 'Each morning at 9, your time: the Dog of the Day. One notification a day, nothing else.', tag: 'welcome', url: '/wall?utm_source=push&utm_medium=push&utm_campaign=ops-57' }, v);
     })().catch((err) => console.error('push welcome', err)));
   }
   return json({ ok: true, new: !known });

@@ -1,4 +1,5 @@
-// "Meet the Dog of the Day each morning": a small panel that asks once, then one notification a day.
+// "Meet the Dog of the Day each morning": a small panel that asks once, then one notification a day at
+// 9 a.m. the phone's own time (the phone's time zone goes along with the subscription).
 // iPhones can only ask inside the home-screen app (iOS 16.4 and later); Android phones can ask in the
 // browser too. "Not now" hides it for two weeks. A phone that already said yes is kept in sync quietly.
 (function () {
@@ -12,6 +13,7 @@
   function bytes(s) { var t = String(s).replace(/-/g, '+').replace(/_/g, '/'); while (t.length % 4) t += '='; return Uint8Array.from(atob(t), function (c) { return c.charCodeAt(0); }); }
   function send(sub, welcome) {
     var body = JSON.parse(JSON.stringify(sub)); body.welcome = !!welcome;
+    try { body.tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { /* old browser: Central */ }
     return fetch('/api/push/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) { if (!r.ok) throw new Error('subscribe ' + r.status); });
   }
   var BTN = 'font:inherit;font-size:16px;border-radius:999px;padding:10px 18px;cursor:pointer;border:1px solid #1f2a44;';
@@ -22,7 +24,7 @@
     box.style.cssText = 'display:flex;gap:14px;align-items:flex-start;background:#fffaf2;border:1px solid #e3d8c6;border-radius:16px;padding:14px 16px;margin:14px 0 18px;color:#2b2622;line-height:1.4';
     box.innerHTML = '<img src="/email/dog-tile.png" width="48" height="48" alt="" style="flex:none;border-radius:10px">'
       + '<div style="flex:1"><p style="margin:0 0 4px;font-size:17px"><strong>Meet the Dog of the Day each morning.</strong></p>'
-      + '<p id="push-msg" style="margin:0 0 10px;font-size:15px;color:#6f665d">One short note at 9 with that day’s dog. Nothing else.</p>'
+      + '<p id="push-msg" style="margin:0 0 10px;font-size:15px;color:#6f665d">One notification at 9 a.m. your time, like a text: that day’s dog and the start of its dedication. Tap it to see the dog and leave a heart. Nothing else.</p>'
       + '<div id="push-btns" style="display:flex;gap:10px;flex-wrap:wrap"><button type="button" id="push-on" style="' + BTN + 'background:#1f2a44;color:#fff">Turn on</button>'
       + '<button type="button" id="push-later" style="' + BTN + 'background:transparent;color:#1f2a44">Not now</button></div></div>';
     var top = document.querySelector('.top');
@@ -46,7 +48,7 @@
           return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytes(j.key) });
         }).then(function (sub) { return send(sub, true); })]).then(function () {
           try { sessionStorage.setItem(SYNCED, '1'); } catch (e) { /* private mode */ }
-          done('You’re set. A hello is on its way, and the first Dog of the Day arrives tomorrow at 9.', 8000);
+          done('You’re set. A hello is on its way, and the first Dog of the Day arrives ' + (new Date().getHours() < 9 ? 'this morning' : 'tomorrow') + ' at 9 a.m.', 8000);
           ev('push_on', { phone: ios ? 'iphone' : 'android' });
         });
       }).catch(function (err) {

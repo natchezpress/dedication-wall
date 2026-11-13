@@ -5,16 +5,22 @@ const enc = new TextEncoder();
 export const now = () => Math.floor(Date.now() / 1000);
 
 // Calendar day in America/Chicago, YYYY-MM-DD (hearts: one per visitor per entry per Central day).
-export function centralDay(ts = Date.now()) {
+// tz: another IANA zone when a phone's own morning is meant (morning notes go at 9 a.m. the phone's time).
+export function centralDay(ts = Date.now(), tz = 'America/Chicago') {
   const d = new Date(ts);
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d);
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d);
   const get = (t) => parts.find((p) => p.type === t).value;
   return `${get('year')}-${get('month')}-${get('day')}`;
 }
 
 // Hour of the day in America/Chicago, 0–23 (heart emails go out in the evening, Central).
-export function centralHour(ts = Date.now()) {
-  return Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hourCycle: 'h23' }).format(new Date(ts)));
+export function centralHour(ts = Date.now(), tz = 'America/Chicago') {
+  return Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hourCycle: 'h23' }).format(new Date(ts)));
+}
+// A time zone name a browser sent us, checked; anything odd becomes Central.
+export function validZone(tz) {
+  if (!tz || typeof tz !== 'string' || tz.length > 64) return null;
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return tz; } catch { return null; }
 }
 
 export function centralDateTime(ts) {
