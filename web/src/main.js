@@ -1,4 +1,4 @@
-import { MASTER, CUTS, render, cut, ensureFonts, sceneHit, sceneGeometry } from './compose.js';
+import { MASTER, CUTS, render, cut, ensureFonts, sceneHit, sceneGeometry, bookPhotoView } from './compose.js';
 import { inWindow } from './windows.js';
 import { suggest } from './lines.js';
 
@@ -234,6 +234,7 @@ const CUTOUT_HINT = {
   ok: 'Done. Drag your dog, the words or the footer to move them; untick the box to use the photo as it was.',
   own: 'That photo already has no background, so it is used as is.',
   failed: 'Couldn’t cut this one out just now. Use a cut-out of your own: on an iPhone, press and hold the dog in Photos, then Copy or Share it as a sticker.',
+  capped: 'That’s today’s cutouts used up on this phone, so the card shows the book page for now. Tomorrow it works again, or use a cut-out of your own: on an iPhone, press and hold the dog in Photos, then Copy or Share it as a sticker.',
 };
 const cutoutStatus = (k) => { const el = $('#cutout-status'); if (el) el.textContent = CUTOUT_HINT[k] || k; };
 
@@ -300,14 +301,18 @@ async function requestCutout() {
     if (!blob.type.startsWith('image/png')) throw new Error('not png');
     const img = trimAlpha(await loadImage(URL.createObjectURL(blob)));
     if (state.photo?.file !== file) return; // the reader changed photos meanwhile
+    // Keep it with the saved photo, so coming back (or reopening the home-screen app) doesn't cut the same
+    // dog again and use up the day's cutouts (11/13: Brock's words and footer stopped moving).
+    if (!FIX) idbSet('cutout', blob);
     state.cutout = { img, file, status: 'ok' };
     cutoutStatus('ok');
     updateHint();
     track('cutout_ok');
   } catch (e) {
     if (state.photo?.file !== file) return;
-    state.cutout = { file, status: 'failed' };
-    cutoutStatus('failed');
+    const capped = e.message === '429';
+    state.cutout = { file, status: capped ? 'capped' : 'failed' };
+    cutoutStatus(capped ? 'capped' : 'failed');
     updateHint();
     track('cutout_failed', { why: e.message });
   }
@@ -354,7 +359,7 @@ $('#photo').addEventListener('change', async (ev) => {
     state.cutout = null;
     $('#zoom').value = '1';
     $('#photo-label').textContent = 'Change photo';
-    idbSet('photo', file); saveDraftNow();
+    idbSet('photo', file); idbDel('cutout'); saveDraftNow();
     trackOnce('photo_added');
     draw();
     if (cutoutOn()) {
@@ -374,6 +379,16 @@ $('#zoom').addEventListener('input', (ev) => {
 
 // drag and pinch on the preview. On a scene, whatever is under the finger moves: the words panel, the
 // footer plate (each up or down, never past the other) or the dog; anywhere else moves the dog too.
+// The saved offsets always match what is drawn. 11/13: with a big dog the words were held at the top, but
+// each drag on them still added to a hidden offset, which then pinned the footer to the bottom too, and
+// the stuck numbers were saved with the draft, so neither box would move again.
+function keepLayoutHonest() {
+  if (!isScene()) return;
+  const g = sceneGeometry(master.getContext('2d'), words(), photoForRender());
+  state.layout.panelDy = g.panelDy;
+  state.layout.footerDy = g.footerDy;
+  if (state.photo) { state.photo.view.dx = g.dogDx; state.photo.view.dy = g.dogDy; }
+}
 const pointers = new Map();
 let pinchStart = null;
 let dragTarget = 'photo';
@@ -387,6 +402,7 @@ preview.addEventListener('pointerdown', (ev) => {
       const r = preview.getBoundingClientRect();
       const k = MASTER.w / preview.clientWidth;
       dragTarget = sceneHit(master, words(), photoForRender(), (ev.clientX - r.left) * k, (ev.clientY - r.top) * k) || 'photo';
+      keepLayoutHonest(); // a draft saved before the fix may carry stuck offsets
     }
   }
   if (pointers.size === 2) {
@@ -400,12 +416,24 @@ preview.addEventListener('pointermove', (ev) => {
   const k = MASTER.w / preview.clientWidth;
   if (pointers.size === 1) {
     const dx = (ev.clientX - prev.x) * k, dy = (ev.clientY - prev.y) * k;
-    if (dragTarget === 'panel') state.layout.panelDy += dy;
-    else if (dragTarget === 'footer') state.layout.footerDy += dy;
+    if (dragTarget === 'panel') {
+      state.layout.panelDy += dy;
+      // The words move even past a big dog: dragged down into him, they push him down too.
+      const g = sceneGeometry(master.getContext('2d'), words(), photoForRender());
+      const blocked = g.panelWant - g.panel.y;
+      if (dy > 0 && blocked > 0) state.photo.view.dy += blocked;
+      keepLayoutHonest();
+      // A dog too big to go any lower (he has to stay on the card) holds the words where they are: say why.
+      if (dy > 0 && blocked > 0 && Math.abs(sceneGeometry(master.getContext('2d'), words(), photoForRender()).panel.y - g.panel.y) < 1) {
+        $('#preview-hint').textContent = 'Your dog is too big for the words to go lower. Make him a little smaller (pinch, or use the slider), then drag the words.';
+      }
+    } else if (dragTarget === 'footer') { state.layout.footerDy += dy; keepLayoutHonest(); }
     else {
       state.photo.view.dx += dx; state.photo.view.dy += dy;
-      // A dog stopped by the words keeps his real place, so dragging back down moves him at once.
-      if (isScene()) state.photo.view.dy = sceneGeometry(master.getContext('2d'), words(), photoForRender()).dogDy;
+      // The view keeps the dog's real place (stopped by the words, or held on the card), so dragging back
+      // moves him at once; on the book page the photo stays in its frame.
+      if (isScene()) { const g = sceneGeometry(master.getContext('2d'), words(), photoForRender()); state.photo.view.dx = g.dogDx; state.photo.view.dy = g.dogDy; }
+      else Object.assign(state.photo.view, bookPhotoView(state.photo));
     }
   }
   pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
@@ -418,7 +446,12 @@ preview.addEventListener('pointermove', (ev) => {
   }
   draw();
 });
-const endPointer = (ev) => { pointers.delete(ev.pointerId); if (pointers.size < 2) pinchStart = null; };
+const endPointer = (ev) => {
+  pointers.delete(ev.pointerId); if (pointers.size < 2) pinchStart = null;
+  // After a pinch the dog's size changed, so his allowed place did too: keep the saved view honest.
+  if (!pointers.size && state.photo) { if (isScene()) keepLayoutHonest(); else Object.assign(state.photo.view, bookPhotoView(state.photo)); }
+  if (!pointers.size) setTimeout(updateHint, 2500); // the "too big" note stays a moment, then the usual hint
+};
 preview.addEventListener('pointerup', endPointer);
 preview.addEventListener('pointercancel', endPointer);
 
@@ -618,11 +651,20 @@ async function restoreDraft() {
       $('#photo-label').textContent = 'Change photo';
     } catch { /* unreadable */ }
   }
+  if (cutoutOn() && state.photo) {
+    const kept = await idbGet('cutout');
+    if (kept instanceof Blob) {
+      try {
+        state.cutout = { img: trimAlpha(await loadImage(URL.createObjectURL(kept))), file: state.photo.file, status: 'ok' };
+        cutoutStatus('ok');
+      } catch { /* unreadable: cut again below */ }
+    }
+  }
   updateHint();
   draw();
-  if (cutoutOn() && state.photo) requestCutout();
+  if (cutoutOn() && state.photo && state.cutout?.status !== 'ok') requestCutout();
 }
-function clearDraft() { try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } idbDel('photo'); }
+function clearDraft() { try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } idbDel('photo'); idbDel('cutout'); }
 
 // ---------- start over ----------
 // Shown once anything is filled in (11/12: Brock's browser still held Tuesday's test dog). One tap arms
@@ -645,7 +687,7 @@ $('#start-over').addEventListener('click', async () => {
   clearTimeout(armTimer);
   wiping = true; clearTimeout(draftTimer);
   try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
-  await idbDel('photo');
+  await idbDel('photo'); await idbDel('cutout');
   track('start_over');
   location.replace(location.pathname);
 });
