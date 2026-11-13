@@ -1162,7 +1162,7 @@ document.getElementById('a-code').addEventListener('submit', async (e) => {
 });
 document.getElementById('a-digits').addEventListener('input', (e) => { if (e.target.value.replace(/\D/g, '').length === 6) document.getElementById('a-code').requestSubmit(); });
 </script>`;
-  return html(simplePage({ title: 'Admin', bodyHtml, noindex: true }), 401, { 'x-robots-tag': 'noindex, nofollow' });
+  return html(simplePage({ title: 'Admin', bodyHtml, noindex: true, analytics: false }), 401, { 'x-robots-tag': 'noindex, nofollow' });
 }
 
 // Fixing a post's pictures from /admin: the maker reopens the post (/?fix=<id>) with the owner's own photo,
@@ -1338,7 +1338,7 @@ async function closeRequest(id){ const r = await fetch('/api/admin/requests',{me
 async function decide(id, status){ const r = await fetch('/api/admin/decide',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status})}); if((await r.json()).ok) location.reload(); }
 async function saveSettings(ev){ ev.preventDefault(); const f=ev.target; const b={}; for(const el of f.elements){ if(!el.name) continue; b[el.name]= el.type==='checkbox'? String(el.checked) : el.value; } const r=await fetch('/api/admin/settings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}); document.getElementById('saved').textContent=(await r.json()).ok?'Saved.':'Failed.'; return false; }
 </script>`;
-  return html(simplePage({ title: 'Admin · Dedication Wall', bodyHtml: body, noindex: true }), 200, headers);
+  return html(simplePage({ title: 'Admin · Dedication Wall', bodyHtml: body, noindex: true, analytics: false }), 200, headers);
 }
 
 // ---------------------------------------------------------------- daily cron
