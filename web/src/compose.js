@@ -121,21 +121,23 @@ function drawFooter(ctx, top) {
   ctx.fillText(SITE, MASTER.w / 2, top + 156);
 }
 
-function measureTextBlock(ctx, d, w) {
+// k: type scale. The book page uses 1; the words panel on a Spot uses SCENE.type, so the dog gets more of
+// the square card (11/13: Brock found the dog's space narrow between the words and the plate).
+function measureTextBlock(ctx, d, w, k = 1) {
   const modeLabel = d.mode === 'inMemory' ? 'IN MEMORY OF' : 'TO';
   const name = (d.name || 'Your dog').trim();
   const line = (d.line || '').trim();
-  const nameFit = fitLines(ctx, name, w, 2, 112, 64, 600);
+  const nameFit = fitLines(ctx, name, w, 2, Math.round(112 * k), Math.round(64 * k), 600);
   // A short line earns a bigger size; a long one shrinks until it fits in five rows.
-  const lineFit = line ? fitLines(ctx, line, w, 5, 80, 44, 400, 'italic') : { size: 80, lines: [] };
-  const labelSize = 40, gap1 = 24, gap2 = 36;
+  const lineFit = line ? fitLines(ctx, line, w, 5, Math.round(80 * k), Math.round(44 * k), 400, 'italic') : { size: Math.round(80 * k), lines: [] };
+  const labelSize = Math.round(40 * k), gap1 = Math.round(24 * k), gap2 = Math.round(36 * k);
   const nameLH = Math.round(nameFit.size * 1.1), lineLH = Math.round(lineFit.size * 1.32);
   const total = labelSize + gap1 + nameFit.lines.length * nameLH + (lineFit.lines.length ? gap2 + lineFit.lines.length * lineLH : 0);
   return { modeLabel, nameFit, lineFit, labelSize, gap1, gap2, nameLH, lineLH, total };
 }
 
-function drawTextBlock(ctx, d, x, w, centerY, align = 'left', ink = INK, quiet = QUIET) {
-  const { modeLabel, nameFit, lineFit, labelSize, gap1, gap2, nameLH, lineLH, total } = measureTextBlock(ctx, d, w);
+function drawTextBlock(ctx, d, x, w, centerY, align = 'left', ink = INK, quiet = QUIET, k = 1) {
+  const { modeLabel, nameFit, lineFit, labelSize, gap1, gap2, nameLH, lineLH, total } = measureTextBlock(ctx, d, w, k);
   let y = centerY - total / 2;
   const ax = align === 'center' ? x + w / 2 : x;
   ctx.textAlign = align;
@@ -200,7 +202,9 @@ function drawBook(ctx, d, photo) {
 // The panel and the plate can each be moved up or down by the reader (d.layout.panelDy / footerDy); the order
 // never flips: the panel stays above the plate, and the dog's feet stay between them.
 const SCENE = {
-  panel: { x: 164, y: 700, w: MASTER.w - 328, pad: 56 }, // top sits inside the 1:1 card (starts 648); height follows the words
+  panel: { x: 164, y: 700, w: MASTER.w - 328, pad: 44, minH: 300 }, // top sits inside the 1:1 card (starts 648); height follows the words
+  type: 0.86,                                            // the words a little smaller than on the book page (11/13)
+  dogMaxW: 1240,                                         // a wide (standing) dog at scale 1: up to three-quarters of the card's width (was 900)
   footerTop: 2080,                                       // plate 2080–2280: inside the 1:1 card (ends 2296), so every cut carries it
   // The panel and the plate drag only within the square card (y 648–2296), so the words and the address
   // always show on the wall and in every link preview (11/11: Lola's card lost “To Lola” and the plate).
@@ -210,7 +214,7 @@ const SCENE = {
 // Everything the scene needs, in master pixels: where the panel, the plate and the dog are.
 export function sceneGeometry(ctx, d, sticker) {
   const lay = d.layout || {};
-  const panelH = Math.max(380, measureTextBlock(ctx, d, SCENE.panel.w - 120).total + SCENE.panel.pad * 2);
+  const panelH = Math.max(SCENE.panel.minH, measureTextBlock(ctx, d, SCENE.panel.w - 120, SCENE.type).total + SCENE.panel.pad * 2);
   const panelY = Math.min(Math.max(SCENE.topMin, SCENE.panel.y + (lay.panelDy || 0)), SCENE.bottomMax - FOOTER.h - SCENE.gap - panelH);
   const footerMin = panelY + panelH + SCENE.gap;
   const footerY = Math.min(Math.max(footerMin, SCENE.footerTop + (lay.footerDy || 0)), SCENE.bottomMax - FOOTER.h);
@@ -223,7 +227,7 @@ export function sceneGeometry(ctx, d, sticker) {
     const floor = footerY - SCENE.dogGap;
     // At scale 1 the dog fits the room between the panel and the plate, whatever its shape.
     const room = Math.max(SCENE.roomMin, floor - (panelY + panelH) - 40);
-    const fitW = Math.min(900, room * iw / ih);
+    const fitW = Math.min(SCENE.dogMaxW, room * iw / ih);
     const w = fitW * (sticker.view?.scale || 1);
     const h = w * ih / iw;
     // The dog starts with his feet just above the plate and can be moved from there, in both directions;
@@ -279,7 +283,7 @@ function drawScene(ctx, d, sticker) {
   ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 40; ctx.shadowOffsetY = 10;
   roundRect(ctx, panel.x, panel.y, panel.w, panel.h, 18); ctx.fill();
   ctx.restore();
-  drawTextBlock(ctx, d, panel.x + 60, panel.w - 120, panel.y + panel.h / 2, 'center');
+  drawTextBlock(ctx, d, panel.x + 60, panel.w - 120, panel.y + panel.h / 2, 'center', INK, QUIET, SCENE.type);
   drawFooter(ctx, g.footer.y);
 }
 
