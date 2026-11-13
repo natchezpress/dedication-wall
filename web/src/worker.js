@@ -2,7 +2,7 @@
 // Static files (the maker) come from the ASSETS binding; everything under /api, /d, /wall, /memory, /i, /p,
 // /privacy, /terms and /admin is answered here.
 import {
-  now, centralDay, centralDateTime, shortId, tokenHex, sha256, makeSession, readSession, sessionCookie,
+  now, centralDay, centralHour, centralDateTime, shortId, tokenHex, sha256, makeSession, readSession, sessionCookie,
   json, html, bad, escapeHtml as h, validEmail, visitorHash, sendMail, screen, suggestLines,
   failure, alertIfNeeded, sense, FAILURE_LABEL, anthropic,
 } from './lib.js';
@@ -35,6 +35,7 @@ export default {
       if (p === '/api/config') return config(env, request);
       if (p === '/api/request' && request.method === 'POST') return requestBackground(env, request);
       if (p === '/api/heart' && request.method === 'POST') return heart(env, request);
+      if (p === '/api/hearts' && (request.method === 'GET' || request.method === 'POST')) return heartSwitch(env, request);
       if (p === '/api/suggest' && request.method === 'POST') return suggest(env, request);
       if (p === '/api/cutout' && request.method === 'POST') return cutout(env, request, ctx);
       if (p === '/api/auth/link' && request.method === 'POST') return authLink(env, request, url);
@@ -51,6 +52,8 @@ export default {
       if (p === '/api/invite' && request.method === 'POST') return sendInvites(env, request);
       if (p === '/api/log' && request.method === 'POST') return pageError(env, request, ctx);
       if (p.startsWith('/api/admin')) return admin(env, request, url);
+      // Local and preview only: run the heart-email tick at a chosen time and see what it sent.
+      if (p === '/api/dev/hearts' && devMode(env)) return json({ ok: true, sent: await heartMail(env, Number(url.searchParams.get('ts')) || Date.now()) });
       if (p.startsWith('/api/')) return bad('no such route', 404);
 
       // ----- admin page -----
@@ -65,8 +68,12 @@ export default {
     }
   },
 
+  // Hourly. The 13:00 UTC tick runs the daily jobs (7 a.m. Central in winter, 8 in summer), as the old
+  // once-a-day trigger did; every tick checks for heart emails, which only send in their Central hours.
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(daily(env));
+    const at = event.scheduledTime || Date.now();
+    if (new Date(at).getUTCHours() === 13) ctx.waitUntil(daily(env));
+    ctx.waitUntil(heartMail(env, at).catch((err) => console.error('heart mail', err)));
   },
 };
 
@@ -339,6 +346,126 @@ async function notifyLive(env, e) {
     subject: `${e.dog_name} is on the wall`,
     text: `${e.dog_name}’s dedication is live:\n${page}\n\nShare this link so friends can see it and leave a heart:\n${inviteUrl}\n\nInvite up to five friends by email (we send one short note and keep no addresses):\n${inviteForm}\n\nKeep the wall on your phone. Add it to your home screen so you can easily come back and visit the Dedication Wall, and see who’s new. Open ${site(env)} on your phone, then:\niPhone: tap Share, then Add to Home Screen.\nAndroid: tap ⋮, then Add to Home screen.\n\nTo take it down at any time:\n${removeUrl}`,
     html: `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p><strong>Keep the wall on your phone.</strong> Add it to your home screen so you can easily come back and visit the Dedication Wall, and see who’s new. <a href="${homeUrl}">Open the wall on your phone</a>, then:<br><strong>iPhone:</strong> tap Share, then Add to Home Screen.<br><strong>Android:</strong> tap ⋮, then Add to Home screen.</p><p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>` });
+}
+
+// ---------------------------------------------------------------- heart emails
+// A dog's person hears about hearts. Once, on the first hourly tick after this shipped (7 a.m. to 9 p.m.
+// Central), everyone whose dogs already had hearts got a catch-up note. From then on: one short note on an
+// evening a dog got new hearts (the 6, 7 and 8 p.m. Central ticks), all of a person's dogs in one note,
+// never more than one a day. Hearts that land after the evening's note wait for the next evening.
+// The day is marked even when a send fails (one try a day), but the count only moves on success, so a
+// failed note's hearts roll into the next one. Test entries never mail. Off with one tap.
+const HEART_EVENING = [18, 21];   // Central hours: from, up to (not including)
+const HEART_CATCHUP = [7, 21];
+
+async function heartMail(env, ts = Date.now()) {
+  const day = centralDay(ts), hour = centralHour(ts);
+  const pending = (await env.DB.prepare('SELECT value FROM settings WHERE key = \'heart_catchup\'').first())?.value === 'pending';
+  let kind = null;
+  if (pending && hour >= HEART_CATCHUP[0] && hour < HEART_CATCHUP[1]) kind = 'catchup';
+  else if (hour >= HEART_EVENING[0] && hour < HEART_EVENING[1]) kind = 'daily';
+  if (!kind) return [];
+  const { results } = await env.DB.prepare(`SELECT e.id, e.dog_name, e.hearts, e.hearts_mailed, e.invite_code, e.owner_email, o.mail_key
+    FROM entries e JOIN owners o ON o.email = e.owner_email
+    WHERE e.status = 'live' AND e.is_test = 0 AND e.hearts > e.hearts_mailed
+      AND o.heart_mail_off = 0 AND (o.heart_mail_day IS NULL OR o.heart_mail_day != ?)
+    ORDER BY e.owner_email, e.live_at`).bind(day).all();
+  const byOwner = new Map();
+  for (const r of results) {
+    if (!byOwner.has(r.owner_email)) byOwner.set(r.owner_email, []);
+    byOwner.get(r.owner_email).push(r);
+  }
+  const out = [];
+  for (const [email, dogs] of byOwner) {
+    try {
+      let key = dogs[0].mail_key;
+      if (!key) {
+        key = (await sha256(`${secret(env)}|hearts|${email}`)).slice(0, 32);
+        await env.DB.prepare('UPDATE owners SET mail_key = ? WHERE email = ?').bind(key, email).run();
+      }
+      const m = heartMailBody(env, { kind, dogs, key });
+      await env.DB.prepare('UPDATE owners SET heart_mail_day = ? WHERE email = ?').bind(day, email).run();
+      const r = await sendMail(env, { to: email, kind: 'hearts', entry_id: dogs[0].id, subject: m.subject, text: m.text, html: m.html,
+        headers: { 'List-Unsubscribe': `<${m.off}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } });
+      if (r.status !== 'failed') {
+        await env.DB.batch(dogs.map((d) => env.DB.prepare('UPDATE entries SET hearts_mailed = ? WHERE id = ? AND hearts_mailed < ?').bind(d.hearts, d.id, d.hearts)));
+      }
+      out.push({ to: email, status: r.status, subject: m.subject, text: m.text, html: m.html });
+    } catch (err) { console.error('heart mail', String(err).slice(0, 160)); }
+  }
+  if (kind === 'catchup') {
+    await env.DB.prepare('UPDATE settings SET value = \'done\', updated_at = ? WHERE key = \'heart_catchup\'').bind(now()).run();
+  }
+  return out;
+}
+
+function heartMailBody(env, { kind, dogs, key }) {
+  const src = kind === 'catchup' ? 'heart-catchup' : 'heart-email';
+  const utm = `utm_source=${src}&utm_medium=email&utm_campaign=ops-57`;
+  const off = `${site(env)}/api/hearts?k=${key}`;
+  const addr = env.POSTAL_ADDRESS || 'Natchez Press LLC, Franklin, Tennessee';
+  const hearts = (x) => `${x} heart${x === 1 ? '' : 's'}`;
+  const and = (xs) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')}, and ${xs[xs.length - 1]}`);
+  const one = dogs.length === 1;
+  const d0 = dogs[0];
+  const rows = dogs.map((d) => {
+    const fresh = d.hearts - d.hearts_mailed;
+    const count = kind === 'catchup' ? `${hearts(d.hearts)} so far`
+      : fresh === d.hearts ? `${hearts(fresh)}` : `${fresh} new, ${d.hearts} in all`;
+    return { d, fresh, count, page: `${site(env)}/d/${d.id}?${utm}` };
+  });
+  const names = and(dogs.map((d) => d.dog_name));
+  const btn = (href, label) => `<a href="${href}" style="display:inline-block;background:#1f2a44;color:#fff;text-decoration:none;padding:11px 18px;border-radius:999px">${label}</a>`;
+  const wrap = (inner) => `<div style="font-family:Georgia,serif;font-size:17px;line-height:1.5;color:#2b2622">${inner}<p style="color:#6f665d;font-size:13px">Rather not get these? <a href="${off}">Turn heart emails off</a>. ${one ? h(d0.dog_name) : 'Your dogs'} stay${one ? 's' : ''} on the wall either way.<br>${h(addr)}</p></div>`;
+  const foot = `\n\nRather not get these? Turn heart emails off:\n${off}\n${one ? d0.dog_name : 'Your dogs'} stay${one ? 's' : ''} on the wall either way.\n\n${addr}`;
+  let subject, text, inner;
+  if (kind === 'catchup') {
+    const share = `${site(env)}/i/${d0.invite_code}?utm_source=share&utm_medium=referral&utm_campaign=ops-57`;
+    const later = `From here on, we’ll send a short note on any evening ${one ? d0.dog_name : 'your dogs'} get${one ? 's' : ''} new hearts, never more than one a day.`;
+    subject = `People are leaving hearts for ${names}`;
+    if (one) {
+      text = `Since ${d0.dog_name} went up on the Dedication Wall, people have been stopping by and leaving hearts: ${rows[0].count}.\n\nSee ${d0.dog_name}’s page:\n${rows[0].page}\n\nShare ${d0.dog_name}’s link and more friends can leave one:\n${share}\n\n${later}${foot}`;
+      inner = `<p>Since <strong>${h(d0.dog_name)}</strong> went up on the Dedication Wall, people have been stopping by and leaving hearts: <strong>${h(rows[0].count)}</strong>.</p><p>${btn(rows[0].page, `See ${h(d0.dog_name)}’s page`)}</p><p>Share ${h(d0.dog_name)}’s link and more friends can leave one: <a href="${share}">${h(share.split('?')[0])}</a></p><p>${h(later)}</p>`;
+    } else {
+      text = `Since your dogs went up on the Dedication Wall, people have been stopping by and leaving hearts:\n\n${rows.map((r) => `${r.d.dog_name}: ${r.count}\n${r.page}`).join('\n\n')}\n\n${later}${foot}`;
+      inner = `<p>Since your dogs went up on the Dedication Wall, people have been stopping by and leaving hearts:</p><p>${rows.map((r) => `<a href="${r.page}"><strong>${h(r.d.dog_name)}</strong></a>: ♥ ${h(r.count)}`).join('<br>')}</p><p>${h(later)}</p>`;
+    }
+  } else if (one) {
+    const r = rows[0];
+    subject = `${d0.dog_name} got ${r.fresh === 1 ? 'a new heart' : `${r.fresh} new hearts`}`;
+    const total = r.fresh === d0.hearts ? '' : ` That’s ${hearts(d0.hearts)} in all.`;
+    text = `${d0.dog_name} got ${r.fresh === 1 ? 'a new heart' : `${r.fresh} new hearts`} on the Dedication Wall.${total}\n\nSee ${d0.dog_name}’s page:\n${r.page}${foot}`;
+    inner = `<p><strong>${h(d0.dog_name)}</strong> got ${r.fresh === 1 ? 'a new heart' : `${r.fresh} new hearts`} on the Dedication Wall.${h(total)}</p><p>${btn(r.page, `See ${h(d0.dog_name)}’s page`)}</p>`;
+  } else {
+    subject = `New hearts for ${names}`;
+    text = `New hearts on the Dedication Wall:\n\n${rows.map((r) => `${r.d.dog_name}: ${r.count}\n${r.page}`).join('\n\n')}${foot}`;
+    inner = `<p>New hearts on the Dedication Wall:</p><p>${rows.map((r) => `<a href="${r.page}"><strong>${h(r.d.dog_name)}</strong></a>: ♥ ${h(r.count)}`).join('<br>')}</p>`;
+  }
+  return { subject, text, html: wrap(inner), off };
+}
+
+// The off switch in every heart email. The GET only shows a page with one button, because mail scanners
+// follow links; the button posts. Mail apps' own one-tap unsubscribe (List-Unsubscribe-Post) posts here too.
+async function heartSwitch(env, request) {
+  const url = new URL(request.url);
+  const k = (url.searchParams.get('k') || '').replace(/[^a-f0-9]/g, '');
+  const o = k ? await env.DB.prepare('SELECT email, heart_mail_off FROM owners WHERE mail_key = ?').bind(k).first() : null;
+  if (!o) return html(notFoundPage(), 404);
+  const action = `/api/hearts?k=${k}`;
+  if (request.method === 'POST') {
+    const form = await request.formData().catch(() => null);
+    const want = form?.get('List-Unsubscribe') === 'One-Click' ? 'off' : form?.get('set');
+    if (want !== 'off' && want !== 'on') return bad('set needed');
+    await env.DB.prepare('UPDATE owners SET heart_mail_off = ? WHERE email = ?').bind(want === 'off' ? 1 : 0, o.email).run();
+    return html(simplePage({ title: want === 'off' ? 'Heart emails are off' : 'Heart emails are on', noindex: true,
+      bodyHtml: want === 'off'
+        ? `<p>You won’t get heart emails anymore. Your dogs stay on the wall, and their hearts keep counting.</p><form method="post" action="${action}"><input type="hidden" name="set" value="on"><button type="submit" class="btn quiet">Turn them back on</button></form><p><a href="/wall">See the wall</a></p>`
+        : '<p>You’ll get a short note on any evening your dogs get new hearts, never more than one a day.</p><p><a href="/wall">See the wall</a></p>' }));
+  }
+  return html(simplePage({ title: o.heart_mail_off ? 'Heart emails are off' : 'Turn heart emails off?', noindex: true,
+    bodyHtml: o.heart_mail_off
+      ? `<p>You don’t get heart emails now.</p><form method="post" action="${action}"><input type="hidden" name="set" value="on"><button type="submit" class="btn">Turn them back on</button></form><p><a href="/wall">See the wall</a></p>`
+      : `<p>You’ll stop getting a note when your dogs get new hearts. Your dogs stay on the wall, and their hearts keep counting.</p><form method="post" action="${action}"><input type="hidden" name="set" value="off"><button type="submit" class="btn">Turn heart emails off</button></form><p><a href="/wall">Keep them; see the wall.</a></p>` }));
 }
 
 // ---------------------------------------------------------------- email invites
@@ -936,11 +1063,12 @@ async function daily(env) {
   const hearts = (await q('SELECT COALESCE(SUM(hearts),0) AS n FROM entries WHERE is_test = 0')).n;
   const requests = (await q('SELECT COUNT(*) AS n FROM requests WHERE status = \'new\'')).n;
   const weekFails = (await q('SELECT COUNT(*) AS n FROM failures WHERE at > ?', since)).n;
+  const heartNotes = (await q('SELECT COUNT(*) AS n FROM notices WHERE kind = \'hearts\' AND status = \'sent\' AND sent_at > ?', since)).n;
   const isMonday = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', weekday: 'short' }).format(new Date()) === 'Mon';
   if (isMonday && env.CONTACT_EMAIL) {
     await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'digest', subject: 'Dedication Wall, this week',
-      text: `New dogs on the wall: ${newLive}\nWaiting in the queue: ${pending}\nHearts so far: ${hearts}\nBackground requests open: ${requests}\nFailures this week: ${weekFails}\n\nAdmin: ${site(env)}/admin`,
-      html: `<p>New dogs on the wall: <strong>${newLive}</strong><br>Waiting in the queue: <strong>${pending}</strong><br>Hearts so far: ${hearts}<br>Background requests open: ${requests}<br>Failures this week: ${weekFails}</p><p><a href="${site(env)}/admin">Admin</a></p>` });
+      text: `New dogs on the wall: ${newLive}\nWaiting in the queue: ${pending}\nHearts so far: ${hearts}\nHeart emails sent: ${heartNotes}\nBackground requests open: ${requests}\nFailures this week: ${weekFails}\n\nAdmin: ${site(env)}/admin`,
+      html: `<p>New dogs on the wall: <strong>${newLive}</strong><br>Waiting in the queue: <strong>${pending}</strong><br>Hearts so far: ${hearts}<br>Heart emails sent: ${heartNotes}<br>Background requests open: ${requests}<br>Failures this week: ${weekFails}</p><p><a href="${site(env)}/admin">Admin</a></p>` });
   }
 }
 

@@ -37,8 +37,9 @@
     "MAILERLITE_GROUP_ID": "203704573000418688"
   },
   "triggers": {
-    // Daily at 13:00 UTC (7 a.m. Central in winter, 8 a.m. in summer): the Monday digest.
-    "crons": ["0 13 * * *"]
+    // Hourly. The 13:00 UTC tick (7 a.m. Central in winter, 8 a.m. in summer) runs the daily jobs and the
+    // Monday digest, as before; every tick checks for heart emails, which only go out in their Central hours.
+    "crons": ["0 * * * *"]
   },
   "observability": { "enabled": true },
 

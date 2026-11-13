@@ -12,6 +12,11 @@ export function centralDay(ts = Date.now()) {
   return `${get('year')}-${get('month')}-${get('day')}`;
 }
 
+// Hour of the day in America/Chicago, 0–23 (heart emails go out in the evening, Central).
+export function centralHour(ts = Date.now()) {
+  return Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hourCycle: 'h23' }).format(new Date(ts)));
+}
+
 export function centralDateTime(ts) {
   return new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(new Date(ts * 1000));
 }
@@ -140,7 +145,8 @@ export async function sense(env, kind, detail, meta) {
   await alertIfNeeded(env, kind);
 }
 
-export async function sendMail(env, { to, subject, text, html: htmlBody, kind, entry_id = null, logTo = null }) {
+// headers: extra mail headers (heart emails carry List-Unsubscribe so a mail app can offer its own off switch).
+export async function sendMail(env, { to, subject, text, html: htmlBody, kind, entry_id = null, logTo = null, headers = null }) {
   const from = env.MAIL_FROM || 'Every Dog Deserves a Dedication <hello@dedication.jetsonsjourney.com>';
   let status = 'dev', provider_id = null, detail = null;
   if (env.RESEND_API_KEY) {
@@ -148,7 +154,7 @@ export async function sendMail(env, { to, subject, text, html: htmlBody, kind, e
       const r = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ from, to, subject, text, html: htmlBody, reply_to: env.CONTACT_EMAIL }),
+        body: JSON.stringify({ from, to, subject, text, html: htmlBody, reply_to: env.CONTACT_EMAIL, ...(headers ? { headers } : {}) }),
       });
       const body = await r.json().catch(() => ({}));
       status = r.ok ? 'sent' : 'failed';
