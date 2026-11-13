@@ -62,6 +62,18 @@ function fitLines(ctx, text, maxWidth, maxLines, startSize, minSize, weight = 40
   return { size, lines };
 }
 
+// On the book page the photo can't be slid out of its frame (11/13): it always covers the frame, or, made
+// smaller than the frame, stays wholly inside it. Returns the view with dx/dy held to that.
+export function bookPhotoView(photo) {
+  const img = photo?.img, view = photo?.view || {};
+  if (!img) return view;
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  const cover = Math.max(PHOTO.w / iw, PHOTO.h / ih) * (view.scale || 1);
+  const mx = Math.abs(iw * cover - PHOTO.w) / 2, my = Math.abs(ih * cover - PHOTO.h) / 2;
+  const hold = (v, m) => Math.min(m, Math.max(-m, v || 0));
+  return { ...view, dx: hold(view.dx, mx), dy: hold(view.dy, my) };
+}
+
 function drawCover(ctx, img, x, y, w, h, view) {
   // view: {scale, dx, dy} relative to a cover-fit; scale 1 = cover fit, dx/dy in canvas px
   const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
@@ -171,7 +183,7 @@ function drawBook(ctx, d, photo) {
   ctx.save();
   roundRect(ctx, PHOTO.x, PHOTO.y, PHOTO.w, PHOTO.h, 14);
   ctx.clip();
-  if (photo?.img) drawCover(ctx, photo.img, PHOTO.x, PHOTO.y, PHOTO.w, PHOTO.h, photo.view);
+  if (photo?.img) drawCover(ctx, photo.img, PHOTO.x, PHOTO.y, PHOTO.w, PHOTO.h, bookPhotoView(photo));
   else {
     ctx.fillStyle = '#e9e1d2'; ctx.fillRect(PHOTO.x, PHOTO.y, PHOTO.w, PHOTO.h);
     ctx.fillStyle = QUIET; ctx.font = `italic 400 40px ${SERIF}`; ctx.textAlign = 'center';
@@ -214,10 +226,15 @@ export function sceneGeometry(ctx, d, sticker) {
     const fitW = Math.min(900, room * iw / ih);
     const w = fitW * (sticker.view?.scale || 1);
     const h = w * ih / iw;
-    const cx = MASTER.w / 2 + (sticker.view?.dx || 0);
-    // The dog starts with his feet just above the plate and can be moved anywhere from there, in both
-    // directions; the panel and the plate are drawn over him, so the words always stay readable.
-    const bottom = floor + (sticker.view?.dy || 0);
+    // The dog starts with his feet just above the plate and can be moved from there, in both directions;
+    // the panel and the plate are drawn over him, so the words always stay readable. He can't be slid off
+    // the card (11/13): his middle stays on the square card, at least a quarter of his size in from its edges
+    // (a small dog stays mostly in view; a big one can't wander off).
+    const card = CUTS.card, hold = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const inX = Math.min(w, card.w) / 4, inY = Math.min(h, card.h) / 4;
+    const cx = hold(MASTER.w / 2 + (sticker.view?.dx || 0), inX, MASTER.w - inX);
+    const midY = hold(floor + (sticker.view?.dy || 0) - h / 2, card.y + inY, card.y + card.h - inY);
+    const bottom = midY + h / 2;
     dog = { x: cx - w / 2, y: bottom - h, w, h, img };
     // …but the words never cover him (Tanner and Lola, 11/11: pinched bigger or dragged up, the dog's head
     // went behind the panel). If he reaches up into it, the panel moves up out of his way, as far as the top
@@ -232,7 +249,10 @@ export function sceneGeometry(ctx, d, sticker) {
     dogDy = dog.y + dog.h - floor;
   }
   const panel = { x: SCENE.panel.x, y: topY, w: SCENE.panel.w, h: panelH };
-  return { panel, footer, dog, dogDy };
+  // panelWant: where the reader's drags put the words before the dog moved them; panelDy and footerDy: the
+  // offsets that match what is drawn, so the maker can keep its saved layout honest (11/13, below).
+  const dogDx = dog ? dog.x + dog.w / 2 - MASTER.w / 2 : 0;
+  return { panel, footer, dog, dogDx, dogDy, panelWant: panelY, panelDy: topY - SCENE.panel.y, footerDy: footerY - SCENE.footerTop };
 }
 
 // Which part of the scene is under a master-pixel point: 'panel', 'footer', 'dog' or null.
