@@ -83,12 +83,16 @@ function draw() {
 }
 
 // ---------- backgrounds ----------
+// Tabs. "Today" is what's in season now; "Year-round" is every day of the year (the key stays 'always',
+// the manifest's group name); "All" is every background in one scroll: today's first, then year-round,
+// milestones, Jetson's Spots, and the other seasons and holidays in calendar order. (11/13: "Always"
+// read oddly, and the off-season backgrounds hid under "More" with no way to see everything at once.)
 const GROUPS = [
   ['today', 'Today'],
-  ['always', 'Always'],
+  ['always', 'Year-round'],
   ['milestone', 'Milestones'],
   ['spot', 'Jetson’s Spots'],
-  ['more', 'More'],
+  ['all', 'All'],
 ];
 
 function visibleEntries(group) {
@@ -102,6 +106,10 @@ function visibleEntries(group) {
     case 'milestone': return all.filter((e) => e.group === 'milestone' && ok(e));
     case 'spot': return all.filter((e) => e.group === 'spot' && ok(e));
     case 'more': return all.filter((e) => (e.group === 'season' || e.group === 'holiday') && !inWindow(e.window, today) && ok(e));
+    case 'all': {
+      const seen = new Set();
+      return ['today', 'always', 'milestone', 'spot', 'more'].flatMap((g) => visibleEntries(g)).filter((e) => !seen.has(e.id) && seen.add(e.id));
+    }
     default: return all.filter(ok);
   }
 }
