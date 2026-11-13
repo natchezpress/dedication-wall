@@ -93,7 +93,7 @@ ${body}
   <a href="https://brockalston.com/terms-of-use">Terms</a>
   <a href="https://brockalston.com/jetsonsjourney">The book</a>
 </footer>
-</div><script src="/push.js?v=1" defer></script></body></html>`;
+</div><script src="/push.js?v=2" defer></script></body></html>`;
 }
 
 const nav = (on) => ['/wall|The wall', '/memory|In Memory', '/|Make yours'].map((s) => {
@@ -141,13 +141,15 @@ export const picV = (key) => (/-v(\d+)\.jpg$/.exec(key || '') || [])[1] || '';
 const withV = (url, key, sep = '?') => (picV(key) ? `${url}${sep}v=${picV(key)}` : url);
 const cardHtml = (e) => `<a class="card" href="/d/${h(e.id)}"><img src="${withV(`/p/${h(e.id)}/card.jpg`, e.card_key)}" alt="${h(e.dog_name)}" loading="lazy" /><div class="meta"><span class="name">${h(e.dog_name)}</span><span class="hearts">♥ ${e.hearts}</span></div></a>`;
 
-export function wallPage({ entries, dotd, memory = false, site }) {
+const DAILY = { name: 'Dog of the Day', current: 'today’s Dog of the Day', Current: 'Today’s Dog of the Day', span: 'day' };
+
+export function wallPage({ entries, dotd, memory = false, site, feature = DAILY }) {
   const title = memory ? 'In Memory · Every Dog Deserves a Dedication' : 'The Dedication Wall';
   const description = memory
     ? 'A quiet wall for the dogs we have lost, each with the dedication they deserved.'
     : 'Dogs and the dedications their people wrote for them, from readers of Jetson’s Journey.';
   const body = `
-${!memory && dotd ? `<div class="dotd"><img src="${withV(`/p/${h(dotd.id)}/card.jpg`, dotd.card_key)}" alt="" /><div><div class="lab">Dog of the day</div><div class="dogname" style="font-size:26px;margin:2px 0 4px">${h(dotd.dog_name)}</div><div class="line" style="font-size:18px;margin:0 0 6px">${h(dotd.line)}</div><a href="/d/${h(dotd.id)}">See the page →</a></div></div>` : ''}
+${!memory && dotd ? `<div class="dotd"><img src="${withV(`/p/${h(dotd.id)}/card.jpg`, dotd.card_key)}" alt="" /><div><div class="lab">${h(feature.name)}</div><div class="dogname" style="font-size:26px;margin:2px 0 4px">${h(dotd.dog_name)}</div><div class="line" style="font-size:18px;margin:0 0 6px">${h(dotd.line)}</div><a href="/d/${h(dotd.id)}">See the page →</a></div></div>` : ''}
 <p class="lede">${memory ? 'For the dogs who are gone. Hearts are welcome.' : 'Newest first. Tap a dog to see the page and leave a heart.'}</p>
 ${entries.length ? `<div class="grid">${entries.map(cardHtml).join('')}</div>` : `<div class="empty">${memory ? 'No dedications here yet.' : 'The wall is empty for now. Be the first: <a href="/">make a dedication</a>.'}</div>`}
 ${tellHtml(site)}`;
@@ -159,10 +161,10 @@ ${tellHtml(site)}`;
 // too, ready for Instagram or Facebook: it is fetched while the page settles, because an iPhone only opens
 // the share sheet straight from the tap. A computer copies the link instead.
 const jsStr = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
-function shareRow({ e, site, owner, dotd, modeText }) {
+function shareRow({ e, site, owner, dotd, modeText, feature = DAILY }) {
   const link = `${site}/i/${e.invite_code}?utm_source=share-sheet&utm_medium=referral&utm_campaign=ops-57`;
-  const text = dotd ? `${e.dog_name} is today’s Dog of the Day on the Dedication Wall.` : `${modeText} ${e.dog_name}: ${e.line}`;
-  const label = dotd && owner ? `Share ${e.dog_name}’s day` : `Share ${e.dog_name}`;
+  const text = dotd ? `${e.dog_name} is ${feature.current} on the Dedication Wall.` : `${modeText} ${e.dog_name}: ${e.line}`;
+  const label = dotd && owner ? `Share ${e.dog_name}’s ${feature.span}` : `Share ${e.dog_name}`;
   const pic = withV(`/p/${e.id}/feed.jpg`, e.feed_key);
   const fb = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(link.replace('share-sheet', 'share-facebook'))}`;
   return `<div class="row share-dog" id="share"><button class="btn" type="button" id="share-dog">${h(label)}</button><a class="btn quiet" href="${h(fb)}" target="_blank" rel="noopener">Facebook</a></div>
@@ -179,8 +181,9 @@ if(location.hash==='#share'){var el=document.getElementById('share');try{el.scro
 }
 
 // owner: null for visitors; for the dog's person {key, left, max, sent, skipped, msg, pending}.
-// dotd: this dog is today's Dog of the Day (a label above the name, and the Share button says so).
-export function dogPage({ e, site, hearted = false, owner = null, dotd = false }) {
+// dotd: this dog is the featured dog right now, Dog of the Week or of the Day (a label above the name, and
+// the Share button says so); feature carries the words.
+export function dogPage({ e, site, hearted = false, owner = null, dotd = false, feature = DAILY }) {
   const modeText = e.mode === 'in_memory' ? 'In memory of' : 'To';
   const title = `${modeText} ${e.dog_name} · Every Dog Deserves a Dedication`;
   const description = e.line;
@@ -207,7 +210,7 @@ export function dogPage({ e, site, hearted = false, owner = null, dotd = false }
 <div class="dog"${hearted ? ' data-hearted="1"' : ''}>
   <img class="story" src="${withV(`/p/${h(e.id)}/story.jpg${q}`, e.story_key, q ? '&' : '?')}" alt="${h(e.dog_name)}’s dedication page" />
   <div class="words">
-    ${dotd ? '<div class="dotd-ribbon">Today’s Dog of the Day</div>' : ''}
+    ${dotd ? `<div class="dotd-ribbon">${h(feature.Current)}</div>` : ''}
     <div class="mode">${modeText}</div>
     <div class="dogname">${h(e.dog_name)}</div>
     <p class="line">${h(e.line)}</p>
@@ -215,7 +218,7 @@ export function dogPage({ e, site, hearted = false, owner = null, dotd = false }
       <form method="post" action="/api/heart" style="display:inline"><input type="hidden" name="entry_id" value="${h(e.id)}" /><button class="btn${hearted ? ' quiet' : ''}" type="submit"${hearted || owner?.pending ? ' disabled' : ''}>♥ ${hearted ? 'Hearted today' : 'Heart this dog'} · ${e.hearts}</button></form>
       <a class="btn quiet" href="/">Make one for your dog</a>
     </div>
-    ${owner?.pending ? '' : shareRow({ e, site, owner: !!owner, dotd, modeText })}
+    ${owner?.pending ? '' : shareRow({ e, site, owner: !!owner, dotd, modeText, feature })}
     ${ownerHtml}
     <p class="small">Posted ${h(centralDateTime(e.live_at || e.created_at))}. Something wrong with this page? <a href="mailto:admin@brockalston.com?subject=Dedication%20${h(e.id)}">Tell us</a>.</p>
   </div>

@@ -971,6 +971,8 @@ function watchForLive(id) {
 // apart from Safari's, so if it isn't signed in as admin yet, five quick taps on the tagline open /admin,
 // where he signs in once in the app; after that the link shows. Nothing on screen hints at the taps.
 function showAdminLink(cfg) { if (cfg?.admin) $('#admin-link').hidden = false; }
+// The featured dog's words follow the admin switch (11/13: Dog of the Week while the wall is small).
+function showFeature(cfg) { if (cfg?.dotd === 'daily') $('#feature-meet').textContent = 'meet the Dog of the Day each morning'; }
 {
   let taps = 0, first = 0;
   $('#tagline').addEventListener('click', () => {
@@ -982,7 +984,7 @@ function showAdminLink(cfg) { if (cfg?.admin) $('#admin-link').hidden = false; }
 
 async function initPost() {
   post.config = await fetchConfig();
-  showAdminLink(post.config);
+  showAdminLink(post.config); showFeature(post.config);
   const cta = $('#post-cta');
   if (!post.config?.posting) { cta.hidden = true; showShareRow(); return; }
   cta.hidden = false;
