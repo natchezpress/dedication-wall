@@ -204,6 +204,7 @@ function drawBook(ctx, d, photo) {
 const SCENE = {
   panel: { x: 164, y: 700, w: MASTER.w - 328, pad: 44, minH: 300 }, // top sits inside the 1:1 card (starts 648); height follows the words
   type: 0.86,                                            // the words a little smaller than on the book page (11/13)
+  tuck: 1 / 3,                                           // how much of the words box a dog may tuck behind (11/13)
   dogMaxW: 1240,                                         // a wide (standing) dog at scale 1: up to three-quarters of the card's width (was 900)
   footerTop: 2080,                                       // plate 2080–2280: inside the 1:1 card (ends 2296), so every cut carries it
   // The panel and the plate drag only within the square card (y 648–2296), so the words and the address
@@ -244,11 +245,16 @@ export function sceneGeometry(ctx, d, sticker) {
     // went behind the panel). If he reaches up into it, the panel moves up out of his way, as far as the top
     // of the square card; past that, he stops at the panel and keeps his size (a very big dog runs down
     // behind the plate instead). A dog dragged wholly above the panel, or off to one side of it, is left alone.
+    // 11/13 (Brock: “no wiggle room at the top”, an enlarged dog was stuck down by the plate): he may tuck
+    // behind the lower third of the words box, as he can tuck behind the plate. The box is translucent and
+    // its words are drawn over him, so they stay readable.
     const across = dog.x < SCENE.panel.x + SCENE.panel.w && dog.x + dog.w > SCENE.panel.x;
-    if (across && bottom > panelY && dog.y < panelY + panelH + SCENE.dogGap) {
-      topY = Math.max(SCENE.topMin, dog.y - SCENE.dogGap - panelH);
+    const tuck = panelH * SCENE.tuck;
+    const reach = dog.y + tuck;   // how high the words must stay clear of
+    if (across && bottom > panelY && reach < panelY + panelH + SCENE.dogGap) {
+      topY = Math.max(SCENE.topMin, reach - SCENE.dogGap - panelH);
       const clear = topY + panelH + SCENE.dogGap;
-      if (dog.y < clear) dog = { ...dog, y: clear };
+      if (reach < clear) dog = { ...dog, y: clear - tuck };
     }
     dogDy = dog.y + dog.h - floor;
   }
