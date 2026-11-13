@@ -722,6 +722,7 @@ function startPolling() {
   post.poll = setInterval(async () => {
     if (Date.now() > until) { clearInterval(post.poll); return; }
     const c = await fetchConfig();
+    showAdminLink(c);
     if (c?.signed_in) showSignedIn(c.signed_in);
   }, 3000);
 }
@@ -965,8 +966,23 @@ function watchForLive(id) {
   setTimeout(tick, 2500);
 }
 
+// Brock's Admin link (11/13: “make it so i only see the admin link”). The server says admin only for his
+// admin cookie or his admin sign-in, so no one else ever sees it. The home-screen app keeps its own sign-in,
+// apart from Safari's, so if it isn't signed in as admin yet, five quick taps on the tagline open /admin,
+// where he signs in once in the app; after that the link shows. Nothing on screen hints at the taps.
+function showAdminLink(cfg) { if (cfg?.admin) $('#admin-link').hidden = false; }
+{
+  let taps = 0, first = 0;
+  $('#tagline').addEventListener('click', () => {
+    const t = Date.now();
+    if (t - first > 2500) { taps = 0; first = t; }
+    if (++taps >= 5) { taps = 0; location.href = '/admin'; }
+  });
+}
+
 async function initPost() {
   post.config = await fetchConfig();
+  showAdminLink(post.config);
   const cta = $('#post-cta');
   if (!post.config?.posting) { cta.hidden = true; showShareRow(); return; }
   cta.hidden = false;
@@ -1085,7 +1101,7 @@ async function boot() {
   draw();
   window.addEventListener('resize', draw);
   document.fonts?.ready?.then(draw);
-  if (!FIX) initPost();
+  if (!FIX) initPost(); else fetchConfig().then(showAdminLink);
 }
 
 // ---------- fix mode (admin) ----------
