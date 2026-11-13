@@ -92,6 +92,18 @@ const postingOn = (env) => String(env.POSTING_ENABLED) === 'true';
 const devMode = (env) => String(env.DEV_MODE) === 'true';
 const site = (env) => env.SITE_URL || 'https://dedication.jetsonsjourney.com';
 const secret = (env) => env.SESSION_SECRET || 'dev';
+
+// Every email to a person opens with the same small mark as the top of the site: the black dog with the
+// red collar on its cream tile, and the site's name. The tile carries its own cream, so it shows in dark
+// mode too. Brock's own alerts and digests stay plain.
+function branded(env, inner) {
+  const s = site(env);
+  return '<div style="font-family:Georgia,serif;font-size:17px;line-height:1.5;color:#2b2622;max-width:560px">'
+    + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 20px"><tr>'
+    + `<td style="vertical-align:middle;padding:0 14px 0 0"><a href="${s}/wall?utm_source=email-mark&utm_medium=email&utm_campaign=ops-57" style="text-decoration:none"><img src="${s}/email/dog-tile.png" width="56" height="56" alt="" style="display:block;width:56px;height:56px;border:0;border-radius:12px"></a></td>`
+    + '<td style="vertical-align:middle;font-family:Georgia,serif;color:#2b2622"><span style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#6f665d">From the novel Jetson’s Journey</span><br><span style="font-size:19px;line-height:1.25">Every Dog Deserves a Dedication</span></td>'
+    + `</tr></table>${inner}</div>`;
+}
 // Production never runs on the 'dev' fallback: without SESSION_SECRET, sign-in, posting and invites refuse.
 const ready = (env) => devMode(env) || !!env.SESSION_SECRET;
 const NOT_READY = () => bad('the wall is not configured yet', 503);
@@ -177,7 +189,7 @@ async function authLink(env, request, url) {
     to: email, kind: 'signin',
     subject: `Your sign-in code for the Dedication Wall: ${code} (sign-in link inside)`,
     text: `Your sign-in code (good for 15 minutes):\n${code}\n\nType it on the page where you made your dedication.\n\nOr tap this link on the same phone, in the same browser:\n${link}\n\nIf you didn’t ask for this, ignore it.`,
-    html: `<p>Your sign-in code (good for 15 minutes):</p><p style="font-size:28px;letter-spacing:0.18em;font-weight:600;margin:6px 0 10px">${code}</p><p>Type it on the page where you made your dedication.</p><p style="color:#6f665d;font-size:13px">Or tap this link on the same phone, in the same browser: <a href="${link}">sign in</a>.</p><p style="color:#6f665d;font-size:13px">If you didn’t ask for this, ignore it.</p>`,
+    html: branded(env, `<p>Your sign-in code (good for 15 minutes):</p><p style="font-size:28px;letter-spacing:0.18em;font-weight:600;margin:6px 0 10px">${code}</p><p>Type it on the page where you made your dedication.</p><p style="color:#6f665d;font-size:13px">Or tap this link on the same phone, in the same browser: <a href="${link}">sign in</a>.</p><p style="color:#6f665d;font-size:13px">If you didn’t ask for this, ignore it.</p>`),
   });
   return json({ ok: true, sent: r.status === 'sent', ...(devMode(env) && r.status !== 'sent' ? { dev_link: link, dev_code: code } : {}) });
 }
@@ -328,7 +340,7 @@ async function rejectEntry(env, e) {
   await deletePhotos(env, e);
   await sendMail(env, { to: e.owner_email, kind: 'rejected', entry_id: e.id, subject: 'About your dedication',
     text: `Thanks for making a dedication for ${e.dog_name}. I couldn’t post it to the wall as submitted, and its photo has been deleted. If you think that’s a mistake, reply to this email and I will take a look.`,
-    html: `<p>Thanks for making a dedication for ${h(e.dog_name)}. I couldn’t post it to the wall as submitted, and its photo has been deleted. If you think that’s a mistake, reply to this email and I will take a look.</p>` });
+    html: branded(env, `<p>Thanks for making a dedication for ${h(e.dog_name)}. I couldn’t post it to the wall as submitted, and its photo has been deleted. If you think that’s a mistake, reply to this email and I will take a look.</p>`) });
 }
 
 async function deletePhotos(env, e) {
@@ -345,7 +357,7 @@ async function notifyLive(env, e) {
   await sendMail(env, { to: e.owner_email, kind: 'live', entry_id: e.id,
     subject: `${e.dog_name} is on the wall`,
     text: `${e.dog_name}’s dedication is live:\n${page}\n\nShare this link so friends can see it and leave a heart:\n${inviteUrl}\n\nInvite up to five friends by email (we send one short note and keep no addresses):\n${inviteForm}\n\nKeep the wall on your phone. Add it to your home screen so you can easily come back and visit the Dedication Wall, and see who’s new. Open ${site(env)} on your phone, then:\niPhone: tap Share, then Add to Home Screen.\nAndroid: tap ⋮, then Add to Home screen.\n\nTo take it down at any time:\n${removeUrl}`,
-    html: `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p><strong>Keep the wall on your phone.</strong> Add it to your home screen so you can easily come back and visit the Dedication Wall, and see who’s new. <a href="${homeUrl}">Open the wall on your phone</a>, then:<br><strong>iPhone:</strong> tap Share, then Add to Home Screen.<br><strong>Android:</strong> tap ⋮, then Add to Home screen.</p><p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>` });
+    html: branded(env, `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p><strong>Keep the wall on your phone.</strong> Add it to your home screen so you can easily come back and visit the Dedication Wall, and see who’s new. <a href="${homeUrl}">Open the wall on your phone</a>, then:<br><strong>iPhone:</strong> tap Share, then Add to Home Screen.<br><strong>Android:</strong> tap ⋮, then Add to Home screen.</p><p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>`) });
 }
 
 // ---------------------------------------------------------------- evening notes (hearts and new dogs)
@@ -440,7 +452,7 @@ function noteBody(env, { kind, dogs, news, key, mine = dogs }) {
   const whose = mine.length === 1 ? mine[0].dog_name : 'Your dogs';
   const foot = `\n\nRather not get these? Turn these emails off:\n${off}\n${whose} stay${whose === 'Your dogs' ? '' : 's'} on the wall either way.\n\n${addr}`;
   const footHtml = `<p style="color:#6f665d;font-size:13px">Rather not get these? <a href="${off}">Turn these emails off</a>. ${h(whose)} stay${whose === 'Your dogs' ? '' : 's'} on the wall either way.<br>${h(addr)}</p>`;
-  const wrap = (inner) => `<div style="font-family:Georgia,serif;font-size:17px;line-height:1.5;color:#2b2622">${inner}${footHtml}</div>`;
+  const wrap = (inner) => branded(env, `${inner}${footHtml}`);
 
   let subject = '', text = '', inner = '';
   if (kind === 'catchup') {
@@ -583,13 +595,11 @@ This one-time note was sent at the request of ${dog}’s person. We did not keep
 ${unsub}
 
 ${addr}`;
-  const html = `<div style="font-family:Georgia,serif;font-size:17px;line-height:1.5;color:#2b2622">
-<p>Someone you know made a dedication for their dog, <strong>${h(dog)}</strong>, on the Dedication Wall: the kind that opens a book, written for a dog.</p>
+  const html = branded(env, `<p>Someone you know made a dedication for their dog, <strong>${h(dog)}</strong>, on the Dedication Wall: the kind that opens a book, written for a dog.</p>
 <p><a href="${page}" style="display:inline-block;background:#1f2a44;color:#fff;text-decoration:none;padding:11px 18px;border-radius:999px">See ${h(dog)}’s page and leave a heart</a></p>
 <p>Make one for your own dog. Free, a minute, on your phone: <a href="${maker}">${h(site(env).replace(/^https?:\/\//, ''))}</a></p>
 <p>Dog people who read: get <em>Riverspook</em>, a free novella from the world of <em>Jetson’s Journey</em>, when you join Brock Alston’s letters: <a href="${magnet}">${h(magnet)}</a></p>
-<p style="color:#6f665d;font-size:13px">This one-time note was sent at the request of ${h(dog)}’s person. We did not keep your address; we remember only not to write again if you ask: <a href="${unsub}">don’t email me again</a>.<br>${h(addr)}</p>
-</div>`;
+<p style="color:#6f665d;font-size:13px">This one-time note was sent at the request of ${h(dog)}’s person. We did not keep your address; we remember only not to write again if you ask: <a href="${unsub}">don’t email me again</a>.<br>${h(addr)}</p>`);
   return { subject: `A dedication for ${dog}`, text, html };
 }
 
