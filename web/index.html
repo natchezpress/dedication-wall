@@ -24,26 +24,27 @@
   <link rel="stylesheet" href="/src/styles.css" />
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-ZQLVEN820R"></script>
   <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-ZQLVEN820R',{send_page_view:true});</script>
-  <!-- Opening from the home screen: the black dog spins up big on the cream, then shrinks and fades into
-       the maker (11/13, Brock). Once per launch (sessionStorage), only in the home-screen app; a phone set to
-       reduce motion gets a plain fade. The cream matches the manifest's background, so it follows the
-       phone's own launch screen without a flash. -->
+  <!-- Opening from the home screen: the black dog turns on the spot, like a figure on a turntable (around his
+       up-and-down axis), then shrinks and fades into the maker, about three seconds in all (11/13, Brock:
+       smaller, a turntable spin, slower). Once per launch (sessionStorage), only in the home-screen app; a
+       phone set to reduce motion gets a plain fade. The cream matches the manifest's background, so it
+       follows the phone's own launch screen without a flash. -->
   <style>
-    #splash { position: fixed; inset: 0; z-index: 9999; display: none; align-items: center; justify-content: center; background: #f7f1e6; pointer-events: none; }
+    #splash { position: fixed; inset: 0; z-index: 9999; display: none; align-items: center; justify-content: center; background: #f7f1e6; pointer-events: none; perspective: 900px; }
     html.splash #splash { display: flex; }
     html.splash body { overflow: hidden; }
-    #splash svg { width: 48vw; max-width: 280px; height: auto; transform: scale(.4); opacity: 0; animation: splash-dog 1.35s cubic-bezier(.45, 0, .25, 1) forwards; }
-    html.splash-out #splash { animation: splash-fade .4s ease forwards; }
+    #splash svg { width: 38vw; max-width: 210px; height: auto; opacity: 0; transform: scale(.85) rotateY(0deg); animation: splash-dog 3s ease-in-out forwards; }
+    html.splash-out #splash { animation: splash-fade .45s ease forwards; }
     @keyframes splash-dog {
-      0% { transform: scale(.4) rotate(-360deg); opacity: 0; }
-      12% { opacity: 1; }
-      58% { transform: scale(1.9) rotate(0deg); opacity: 1; }
-      100% { transform: scale(.12) rotate(0deg); opacity: 0; }
+      0% { transform: scale(.85) rotateY(0deg); opacity: 0; }
+      10% { opacity: 1; }
+      75% { transform: scale(1) rotateY(720deg); opacity: 1; }
+      100% { transform: scale(.15) rotateY(720deg); opacity: 0; }
     }
     @keyframes splash-fade { to { opacity: 0; } }
     @media (prefers-reduced-motion: reduce) {
-      #splash svg { animation: splash-calm 1s ease forwards; }
-      @keyframes splash-calm { 0% { opacity: 0; transform: scale(1); } 30%, 70% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1); } }
+      #splash svg { animation: splash-calm 2.4s ease forwards; }
+      @keyframes splash-calm { 0% { opacity: 0; transform: none; } 20%, 80% { opacity: 1; transform: none; } 100% { opacity: 0; transform: none; } }
     }
   </style>
   <script>
@@ -54,8 +55,8 @@
         sessionStorage.setItem('dw_splash', '1');
         var root = document.documentElement;
         root.classList.add('splash');
-        setTimeout(function () { root.classList.add('splash-out'); }, 1050);
-        setTimeout(function () { root.classList.remove('splash', 'splash-out'); }, 1450);
+        setTimeout(function () { root.classList.add('splash-out'); }, 2650);
+        setTimeout(function () { root.classList.remove('splash', 'splash-out'); }, 3100);
       } catch (e) { /* no splash, no harm */ }
     })();
   </script>
