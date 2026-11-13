@@ -23,6 +23,8 @@ h1 a{text-decoration:none;color:inherit}
 .hearts{color:var(--quiet);white-space:nowrap}
 .dotd{background:#fff;border:1px solid #e3d9c7;border-radius:12px;padding:14px;margin:0 0 22px;display:grid;grid-template-columns:120px 1fr;gap:14px;align-items:center}
 .dotd img{width:120px;height:120px;object-fit:cover;border-radius:8px}
+.dotd-ribbon{display:inline-block;background:var(--navy);color:var(--paper);font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;padding:6px 11px;border-radius:999px;margin:0 0 10px}
+.share-dog{margin-top:12px}
 .dotd .lab{font-family:var(--sans);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold)}
 .dog{display:grid;gap:18px;grid-template-columns:1fr}
 @media(min-width:720px){.dog{grid-template-columns:minmax(0,420px) 1fr;align-items:start}}
@@ -89,7 +91,7 @@ ${body}
   <a href="https://brockalston.com/terms-of-use">Terms</a>
   <a href="https://brockalston.com/jetsonsjourney">The book</a>
 </footer>
-</div></body></html>`;
+</div><script src="/push.js?v=1" defer></script></body></html>`;
 }
 
 const nav = (on) => ['/wall|The wall', '/memory|In Memory', '/|Make yours'].map((s) => {
@@ -150,8 +152,33 @@ ${tellHtml(site)}`;
   return layout({ title, description, url: `${site}${memory ? '/memory' : '/wall'}`, body, nav: nav(memory ? '/memory' : '/wall') });
 }
 
+// The Share button on a dog's page. Everyone gets the phone's share sheet with the page link (its preview
+// is the dog's card). The dog's person (signed in, or from the link in an email) gets the picture itself
+// too, ready for Instagram or Facebook: it is fetched while the page settles, because an iPhone only opens
+// the share sheet straight from the tap. A computer copies the link instead.
+const jsStr = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
+function shareRow({ e, site, owner, dotd, modeText }) {
+  const link = `${site}/i/${e.invite_code}?utm_source=share-sheet&utm_medium=referral&utm_campaign=ops-57`;
+  const text = dotd ? `${e.dog_name} is today’s Dog of the Day on the Dedication Wall.` : `${modeText} ${e.dog_name}: ${e.line}`;
+  const label = dotd && owner ? `Share ${e.dog_name}’s day` : `Share ${e.dog_name}`;
+  const pic = withV(`/p/${e.id}/feed.jpg`, e.feed_key);
+  const fb = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(link.replace('share-sheet', 'share-facebook'))}`;
+  return `<div class="row share-dog" id="share"><button class="btn" type="button" id="share-dog">${h(label)}</button><a class="btn quiet" href="${h(fb)}" target="_blank" rel="noopener">Facebook</a></div>
+<p class="small" id="share-msg" hidden></p>
+<script>(function(){var link=${jsStr(link)},text=${jsStr(text)},pic=${jsStr(pic)},owner=${owner ? 'true' : 'false'},dotd=${dotd ? 'true' : 'false'},file=null;
+function ev(n,p){try{gtag('event',n,p||{})}catch(x){}}
+function say(t){var m=document.getElementById('share-msg');m.textContent=t;m.hidden=false}
+if((owner||location.hash==='#share')&&navigator.canShare){fetch(pic).then(function(r){return r.ok?r.blob():null}).then(function(b){if(!b)return;var f=new File([b],${jsStr(`${e.dog_name.replace(/[^A-Za-z0-9]+/g, '-')}-dedication.jpg`)},{type:'image/jpeg'});if(navigator.canShare({files:[f]}))file=f}).catch(function(){})}
+document.getElementById('share-dog').addEventListener('click',function(){
+if(file){navigator.share({files:[file],text:text+' '+link}).then(function(){ev('share_dog',{how:'picture',owner:owner,dotd:dotd})}).catch(function(){});return}
+if(navigator.share){navigator.share({title:document.title,text:text,url:link}).then(function(){ev('share_dog',{how:'sheet',owner:owner,dotd:dotd})}).catch(function(){});return}
+(navigator.clipboard?navigator.clipboard.writeText(link):Promise.reject()).then(function(){say('Link copied. Paste it anywhere.');ev('share_dog',{how:'copy',owner:owner,dotd:dotd})},function(){say(link)})});
+if(location.hash==='#share'){var el=document.getElementById('share');try{el.scrollIntoView({block:'center'})}catch(x){}}})();</script>`;
+}
+
 // owner: null for visitors; for the dog's person {key, left, max, sent, skipped, msg, pending}.
-export function dogPage({ e, site, hearted = false, owner = null }) {
+// dotd: this dog is today's Dog of the Day (a label above the name, and the Share button says so).
+export function dogPage({ e, site, hearted = false, owner = null, dotd = false }) {
   const modeText = e.mode === 'in_memory' ? 'In memory of' : 'To';
   const title = `${modeText} ${e.dog_name} · Every Dog Deserves a Dedication`;
   const description = e.line;
@@ -178,6 +205,7 @@ export function dogPage({ e, site, hearted = false, owner = null }) {
 <div class="dog">
   <img class="story" src="${withV(`/p/${h(e.id)}/story.jpg${q}`, e.story_key, q ? '&' : '?')}" alt="${h(e.dog_name)}’s dedication page" />
   <div class="words">
+    ${dotd ? '<div class="dotd-ribbon">Today’s Dog of the Day</div>' : ''}
     <div class="mode">${modeText}</div>
     <div class="dogname">${h(e.dog_name)}</div>
     <p class="line">${h(e.line)}</p>
@@ -185,7 +213,7 @@ export function dogPage({ e, site, hearted = false, owner = null }) {
       <form method="post" action="/api/heart" style="display:inline"><input type="hidden" name="entry_id" value="${h(e.id)}" /><button class="btn${hearted ? ' quiet' : ''}" type="submit"${hearted || owner?.pending ? ' disabled' : ''}>♥ ${hearted ? 'Hearted today' : 'Heart this dog'} · ${e.hearts}</button></form>
       <a class="btn quiet" href="/">Make one for your dog</a>
     </div>
-    <p class="small">Share this page: <a href="/d/${h(e.id)}">${h(site.replace(/^https?:\/\//, ''))}/d/${h(e.id)}</a></p>
+    ${owner?.pending ? '' : shareRow({ e, site, owner: !!owner, dotd, modeText })}
     ${ownerHtml}
     <p class="small">Posted ${h(centralDateTime(e.live_at || e.created_at))}. Something wrong with this page? <a href="mailto:admin@brockalston.com?subject=Dedication%20${h(e.id)}">Tell us</a>.</p>
   </div>

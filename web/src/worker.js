@@ -4,7 +4,7 @@
 import {
   now, centralDay, centralHour, centralDateTime, shortId, tokenHex, sha256, makeSession, readSession, sessionCookie,
   json, html, bad, escapeHtml as h, validEmail, visitorHash, sendMail, screen, suggestLines,
-  failure, alertIfNeeded, sense, FAILURE_LABEL, anthropic,
+  failure, alertIfNeeded, sense, FAILURE_LABEL, anthropic, uaFamily, newVapidKeys, encryptPush, sendPush,
 } from './lib.js';
 import { wallPage, dogPage, simplePage, notFoundPage, picV } from './pages.js';
 
@@ -36,6 +36,9 @@ export default {
       if (p === '/api/request' && request.method === 'POST') return requestBackground(env, request);
       if (p === '/api/heart' && request.method === 'POST') return heart(env, request);
       if (p === '/api/hearts' && (request.method === 'GET' || request.method === 'POST')) return heartSwitch(env, request);
+      if (p === '/api/push/key' && request.method === 'GET') return pushKey(env);
+      if (p === '/api/push/subscribe' && request.method === 'POST') return pushSubscribe(env, request, ctx);
+      if (p === '/api/push/unsubscribe' && request.method === 'POST') return pushUnsubscribe(env, request);
       if (p === '/api/suggest' && request.method === 'POST') return suggest(env, request);
       if (p === '/api/cutout' && request.method === 'POST') return cutout(env, request, ctx);
       if (p === '/api/auth/link' && request.method === 'POST') return authLink(env, request, url);
@@ -53,6 +56,7 @@ export default {
       if (p === '/api/log' && request.method === 'POST') return pageError(env, request, ctx);
       if (p.startsWith('/api/admin')) return admin(env, request, url);
       // Local and preview only: run the evening-note tick at a chosen time and see what it sent.
+      if (p === '/api/dev/morning' && devMode(env)) return json({ ok: true, out: await morning(env, Number(url.searchParams.get('ts')) || Date.now()) });
       if (p === '/api/dev/hearts' && devMode(env)) return json({ ok: true, sent: await eveningNotes(env, Number(url.searchParams.get('ts')) || Date.now()) });
       if (p.startsWith('/api/')) return bad('no such route', 404);
 
@@ -69,11 +73,13 @@ export default {
   },
 
   // Hourly. The 13:00 UTC tick runs the daily jobs (7 a.m. Central in winter, 8 in summer), as the old
-  // once-a-day trigger did; every tick checks for evening notes (hearts and new dogs), which only send in their Central hours.
+  // once-a-day trigger did. Every tick also checks the morning job (9 and 10 a.m. Central: Dog of the Day
+  // email and notifications) and the evening notes (6, 7 and 8 p.m.); each only acts in its own hours.
   async scheduled(event, env, ctx) {
     const at = event.scheduledTime || Date.now();
     if (new Date(at).getUTCHours() === 13) ctx.waitUntil(daily(env));
     ctx.waitUntil(eveningNotes(env, at).catch((err) => console.error('evening notes', err)));
+    ctx.waitUntil(morning(env, at).catch((err) => console.error('morning', err)));
   },
 };
 
@@ -666,20 +672,206 @@ async function remove(env, request) {
   return html(simplePage({ title: 'Removed', bodyHtml: '<p>The dedication is off the wall, and its photos are deleted. <a href="/">Make another any time.</a></p>', noindex: true }));
 }
 
-// ---------------------------------------------------------------- the wall
-async function wall(env, request, memory) {
+// ---------------------------------------------------------------- Dog of the Day
+// One dog per Central day, kept in dotd_log so the wall, the dog's page, the email and the morning note
+// all agree. Brock's admin override (settings dog_of_the_day) wins while it's set. Otherwise a rotation:
+// dogs that have never had a day go first, in the order they joined the wall; once every dog has had one,
+// the dog whose last day is longest ago. Main-wall dogs only (In Memory has no Dog of the Day); never a
+// test entry. If the day's dog comes down, the next in line takes the rest of the day.
+const DOTD_COLS = 'e.id, e.dog_name, e.line, e.mode, e.card_key, e.owner_email, e.invite_code, e.hearts';
+async function nextInLine(env, day) {
+  return env.DB.prepare(`SELECT e.id FROM entries e
+    LEFT JOIN (SELECT entry_id, MAX(day) AS last FROM dotd_log WHERE day < ? GROUP BY entry_id) l ON l.entry_id = e.id
+    WHERE e.status = 'live' AND e.is_test = 0 AND e.mode = 'for' AND e.live_at IS NOT NULL
+    ORDER BY (l.last IS NOT NULL), l.last, e.live_at LIMIT 1`).bind(day).first();
+}
+async function dogOfTheDay(env, day = centralDay()) {
   const s = await settings(env);
-  const mode = memory ? 'in_memory' : 'for';
-  const { results } = await env.DB.prepare('SELECT id, dog_name, line, hearts, card_key FROM entries WHERE status = \'live\' AND mode = ? AND is_test = 0 ORDER BY live_at DESC LIMIT 200').bind(mode).all();
-  let dotd = null;
-  if (!memory) {
-    dotd = s.dogOfTheDay ? await env.DB.prepare('SELECT id, dog_name, line, card_key FROM entries WHERE id = ? AND status = \'live\'').bind(s.dogOfTheDay).first() : null;
-    if (!dotd && results.length) {
-      // deterministic daily pick: the day's hash picks a live entry
-      const idx = parseInt((await sha256(centralDay())).slice(0, 8), 16) % results.length;
-      dotd = results[idx];
+  if (s.dogOfTheDay) {
+    const e = await env.DB.prepare(`SELECT ${DOTD_COLS} FROM entries e WHERE e.id = ? AND e.status = 'live'`).bind(s.dogOfTheDay).first();
+    if (e) {
+      await env.DB.prepare('INSERT INTO dotd_log (day, entry_id, picked_at) VALUES (?,?,?) ON CONFLICT(day) DO UPDATE SET entry_id = excluded.entry_id WHERE dotd_log.entry_id != excluded.entry_id AND dotd_log.mailed_at IS NULL')
+        .bind(day, e.id, now()).run();
+      return e;
     }
   }
+  const have = await env.DB.prepare(`SELECT ${DOTD_COLS} FROM dotd_log d JOIN entries e ON e.id = d.entry_id WHERE d.day = ? AND e.status = 'live'`).bind(day).first();
+  if (have) return have;
+  const pick = await nextInLine(env, day);
+  if (!pick) return null;
+  await env.DB.prepare('INSERT INTO dotd_log (day, entry_id, picked_at) VALUES (?,?,?) ON CONFLICT(day) DO UPDATE SET entry_id = excluded.entry_id, picked_at = excluded.picked_at')
+    .bind(day, pick.id, now()).run();
+  return env.DB.prepare(`SELECT ${DOTD_COLS} FROM entries e WHERE e.id = ?`).bind(pick.id).first();
+}
+const centralTomorrow = (ts = Date.now()) => centralDay(ts + 26 * 3600 * 1000 - centralHour(ts) * 3600 * 1000);
+
+// ---------------------------------------------------------------- the morning: Dog of the Day goes out
+// At the 9 and 10 a.m. Central ticks: the dog's person gets one email (the dog's picture and a one-tap
+// share), and every phone that turned on morning notes gets one notification. Each is claimed before it
+// sends, so a repeated tick never sends twice; a deploy after 11 starts the next morning.
+const MORNING = [9, 11];        // Central hours: from, up to (not including)
+const PUSH_PER_TICK = 30;       // phones per tick, well inside a Worker's outbound-request allowance
+const DOTD_MAIL_GAP = 30 * 86400; // a dog's person hears "Dog of the Day" at most once a month
+
+async function morning(env, ts = Date.now()) {
+  const hour = centralHour(ts);
+  if (hour < MORNING[0] || hour >= MORNING[1]) return null;
+  const day = centralDay(ts);
+  const e = await dogOfTheDay(env, day);
+  if (!e) return null;
+  const out = { day, dog: e.dog_name, mail: null, push: null };
+  const claim = await env.DB.prepare('UPDATE dotd_log SET mailed_at = ? WHERE day = ? AND mailed_at IS NULL').bind(now(), day).run();
+  if (claim.meta.changes) out.mail = await dotdOwnerMail(env, e, day);
+  out.push = await pushMorning(env, e, day);
+  return out;
+}
+
+async function ownerMailKey(env, email, have) {
+  if (have) return have;
+  const key = (await sha256(`${secret(env)}|hearts|${email}`)).slice(0, 32);
+  await env.DB.prepare('UPDATE owners SET mail_key = ? WHERE email = ?').bind(key, email).run();
+  return key;
+}
+
+async function dotdOwnerMail(env, e, day) {
+  const o = await env.DB.prepare('SELECT email, heart_mail_off, mail_key FROM owners WHERE email = ?').bind(e.owner_email).first();
+  if (!o || o.heart_mail_off) return 'off';
+  const recent = await env.DB.prepare('SELECT 1 FROM notices WHERE kind = \'dotd\' AND entry_id = ? AND sent_at > ? AND status != \'failed\'').bind(e.id, now() - DOTD_MAIL_GAP).first();
+  if (recent) return 'told this month';
+  const key = await ownerMailKey(env, o.email, o.mail_key);
+  const m = await dotdMailBody(env, e, key);
+  const r = await sendMail(env, { to: o.email, kind: 'dotd', entry_id: e.id, subject: m.subject, text: m.text, html: m.html,
+    headers: { 'List-Unsubscribe': `<${m.off}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } });
+  // It is this person's one email for the day; their evening note's news waits for tomorrow evening.
+  if (r.status !== 'failed') await env.DB.prepare('UPDATE owners SET heart_mail_day = ? WHERE email = ?').bind(day, o.email).run();
+  return devMode(env) ? { status: r.status, to: o.email, subject: m.subject, text: m.text, html: m.html } : r.status;
+}
+
+async function dotdMailBody(env, e, key) {
+  const s = site(env), dog = e.dog_name;
+  const utm = (src, medium = 'email') => `utm_source=${src}&utm_medium=${medium}&utm_campaign=ops-57`;
+  const share = `${s}/d/${e.id}?k=${await inviteKey(env, e.id)}&${utm('dotd-email')}#share`;
+  const fb = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(`${s}/i/${e.invite_code}?${utm('dotd-facebook', 'social')}`)}`;
+  const card = `${s}/p/${e.id}/card.jpg${picV(e.card_key) ? `?v=${picV(e.card_key)}` : ''}`;
+  const off = `${s}/api/hearts?k=${key}`;
+  const addr = env.POSTAL_ADDRESS || 'Natchez Press LLC, Franklin, Tennessee';
+  const btn = (href, label) => `<a href="${href}" style="display:inline-block;background:#1f2a44;color:#fff;text-decoration:none;padding:11px 18px;border-radius:999px">${label}</a>`;
+  const subject = `${dog} is today’s Dog of the Day`;
+  const text = `${dog} is today’s Dog of the Day on the Dedication Wall. Everyone who opens the wall today sees ${dog} first.
+
+Share ${dog}’s day. This opens ${dog}’s page, where the Share button sends the picture straight to Facebook, Instagram or a text:
+${share}
+
+Or post the link on Facebook:
+${fb}
+
+Rather not get these? Turn these emails off:
+${off}
+${dog} stays on the wall either way.
+
+${addr}`;
+  const html = branded(env, `<p><strong>${h(dog)}</strong> is today’s Dog of the Day on the Dedication Wall. Everyone who opens the wall today sees ${h(dog)} first.</p>
+<p><a href="${share}" style="text-decoration:none"><img src="${card}" width="280" alt="${h(dog)}’s dedication" style="display:block;width:280px;max-width:100%;height:auto;border:0;border-radius:14px"></a></p>
+<p>${btn(share, `Share ${h(dog)}’s day`)}</p>
+<p style="font-size:15px">The button opens ${h(dog)}’s page; tap Share there and the picture goes straight to Facebook, Instagram or a text. Or <a href="${fb}">post the link on Facebook</a>.</p>
+<p style="color:#6f665d;font-size:13px">Rather not get these? <a href="${off}">Turn these emails off</a>. ${h(dog)} stays on the wall either way.<br>${h(addr)}</p>`);
+  return { subject, text, html, off };
+}
+
+// ---------------------------------------------------------------- morning notes (web push)
+// Phones that asked for the Dog of the Day each morning. iPhones can only ask from the home-screen app;
+// Android can ask in the browser too. The site's push key pair is made on first use and kept in settings,
+// so there is nothing to set up. Only the big push services are accepted as addresses, so nobody can point
+// the Worker at some other server. A phone the push service says is gone (404/410) is dropped; five
+// failures in a row drop one too.
+const PUSH_HOSTS = /^(fcm\.googleapis\.com|android\.googleapis\.com|updates\.push\.services\.mozilla\.com|([a-z0-9-]+\.)*push\.apple\.com|([a-z0-9-]+\.)*notify\.windows\.com)$/;
+async function vapid(env) {
+  const read = async () => {
+    const { results } = await env.DB.prepare('SELECT key, value FROM settings WHERE key IN (\'vapid_public\', \'vapid_private\')').all();
+    const m = Object.fromEntries(results.map((r) => [r.key, r.value]));
+    return m.vapid_public && m.vapid_private ? { publicKey: m.vapid_public, privateJwk: m.vapid_private } : null;
+  };
+  const have = await read();
+  if (have) return have;
+  const k = await newVapidKeys();
+  const put = 'INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?,?,?)';
+  await env.DB.batch([env.DB.prepare(put).bind('vapid_public', k.publicKey, now()), env.DB.prepare(put).bind('vapid_private', k.privateJwk, now())]);
+  return read();
+}
+const pushSubject = (env) => `mailto:${env.CONTACT_EMAIL || 'admin@brockalston.com'}`;
+
+// One phone. Returns the status; keeps the table tidy as it goes.
+async function pushOne(env, sub, payload, v) {
+  let status;
+  if (devMode(env)) {
+    await encryptPush({ p256dh: sub.p256dh, auth: sub.auth, payload: JSON.stringify(payload) }); // exercise the crypto, send nothing
+    status = 'dev';
+  } else {
+    try { status = await sendPush(sub, payload, v, pushSubject(env)); } catch (err) { status = 0; console.error('push', String(err).slice(0, 120)); }
+  }
+  if (status === 404 || status === 410) await env.DB.prepare('DELETE FROM push_subs WHERE endpoint = ?').bind(sub.endpoint).run();
+  else if (status === 'dev' || (status >= 200 && status < 300)) await env.DB.prepare('UPDATE push_subs SET last_ok_at = ?, fails = 0 WHERE endpoint = ?').bind(now(), sub.endpoint).run();
+  else {
+    await env.DB.prepare('UPDATE push_subs SET fails = fails + 1 WHERE endpoint = ?').bind(sub.endpoint).run();
+    await env.DB.prepare('DELETE FROM push_subs WHERE endpoint = ? AND fails >= 5').bind(sub.endpoint).run();
+  }
+  return status;
+}
+
+async function pushMorning(env, e, day) {
+  const { results: subs } = await env.DB.prepare('SELECT endpoint, p256dh, auth FROM push_subs WHERE last_day IS NULL OR last_day != ? LIMIT ?').bind(day, PUSH_PER_TICK).all();
+  if (!subs.length) return { sent: 0 };
+  // Claim the batch for today first: a phone gets at most one try a morning.
+  await env.DB.batch(subs.map((x) => env.DB.prepare('UPDATE push_subs SET last_day = ? WHERE endpoint = ?').bind(day, x.endpoint)));
+  const v = await vapid(env);
+  const line = e.line.length > 110 ? `${e.line.slice(0, 107).trimEnd()}…` : e.line;
+  const payload = {
+    title: `Today’s Dog of the Day: ${e.dog_name}`, body: line, tag: 'dotd',
+    url: `/d/${e.id}?utm_source=push&utm_medium=push&utm_campaign=ops-57`,
+    image: `${site(env)}/p/${e.id}/card.jpg${picV(e.card_key) ? `?v=${picV(e.card_key)}` : ''}`,
+  };
+  const tally = {};
+  for (const x of subs) { const st = await pushOne(env, x, payload, v); tally[st] = (tally[st] || 0) + 1; }
+  return { sent: subs.length, tally };
+}
+
+async function pushKey(env) {
+  const v = await vapid(env);
+  return json({ ok: true, key: v.publicKey });
+}
+
+async function pushSubscribe(env, request, ctx) {
+  const b = await request.json().catch(() => ({}));
+  const endpoint = String(b.endpoint || ''), p256dh = String(b.keys?.p256dh || ''), auth = String(b.keys?.auth || '');
+  let u = null;
+  try { u = new URL(endpoint); } catch { /* not a URL */ }
+  if (!u || u.protocol !== 'https:' || !PUSH_HOSTS.test(u.hostname) || endpoint.length > 1000) return bad('not a push service address');
+  if (!/^[A-Za-z0-9_-]{80,100}$/.test(p256dh) || !/^[A-Za-z0-9_-]{16,32}$/.test(auth)) return bad('push keys needed');
+  const known = await env.DB.prepare('SELECT 1 FROM push_subs WHERE endpoint = ?').bind(endpoint).first();
+  if (!known && (await env.DB.prepare('SELECT COUNT(*) AS n FROM push_subs').first()).n >= 20000) return bad('full', 503);
+  await env.DB.prepare('INSERT INTO push_subs (endpoint, p256dh, auth, created_at, ua) VALUES (?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, fails = 0')
+    .bind(endpoint, p256dh, auth, now(), uaFamily(request.headers.get('user-agent') || '')).run();
+  // A brand-new phone gets a hello right away, so the person sees it works.
+  if (!known && b.welcome) {
+    ctx.waitUntil((async () => {
+      const v = await vapid(env);
+      await pushOne(env, { endpoint, p256dh, auth }, { title: 'You’re set', body: 'Tomorrow at 9: the Dog of the Day. One note a morning, nothing else.', tag: 'welcome', url: '/wall?utm_source=push&utm_medium=push&utm_campaign=ops-57' }, v);
+    })().catch((err) => console.error('push welcome', err)));
+  }
+  return json({ ok: true, new: !known });
+}
+
+async function pushUnsubscribe(env, request) {
+  const b = await request.json().catch(() => ({}));
+  await env.DB.prepare('DELETE FROM push_subs WHERE endpoint = ?').bind(String(b.endpoint || '')).run();
+  return json({ ok: true });
+}
+
+// ---------------------------------------------------------------- the wall
+async function wall(env, request, memory) {
+  const mode = memory ? 'in_memory' : 'for';
+  const { results } = await env.DB.prepare('SELECT id, dog_name, line, hearts, card_key FROM entries WHERE status = \'live\' AND mode = ? AND is_test = 0 ORDER BY live_at DESC LIMIT 200').bind(mode).all();
+  const dotd = memory ? null : await dogOfTheDay(env);
   return html(wallPage({ entries: results, dotd, memory, site: site(env) }), 200, { 'cache-control': 'public, max-age=60' });
 }
 
@@ -702,7 +894,8 @@ async function dog(env, request, id) {
       sent: url.searchParams.get('sent'), skipped: url.searchParams.get('skipped'), msg: url.searchParams.get('msg'), pending: e.status === 'pending' };
   }
   const headers = owner ? { 'cache-control': 'no-store' } : { 'cache-control': 'public, max-age=60' };
-  return html(dogPage({ e, site: site(env), hearted, owner: invite }), 200, headers);
+  const today = e.status === 'live' && e.mode === 'for' ? await dogOfTheDay(env) : null;
+  return html(dogPage({ e, site: site(env), hearted, owner: invite, dotd: today?.id === e.id }), 200, headers);
 }
 
 async function photo(env, request, rest) {
@@ -1054,6 +1247,10 @@ async function adminPage(env, request, url) {
   const headers = { 'x-robots-tag': 'noindex, nofollow' };
   if (url.searchParams.get('token')) headers['set-cookie'] = `dw_admin=${await sha256(`${adminToken(env)}|admin`)}; Path=/; Max-Age=${90 * 86400}; HttpOnly; SameSite=Lax; Secure`;
   const s = await settings(env);
+  const dotdToday = await dogOfTheDay(env);
+  const nextId = (await nextInLine(env, centralTomorrow()))?.id;
+  const dotdNext = nextId ? await env.DB.prepare('SELECT dog_name FROM entries WHERE id = ?').bind(nextId).first() : null;
+  const pushPhones = (await env.DB.prepare('SELECT COUNT(*) AS n FROM push_subs').first()).n;
   const { results: queue } = await env.DB.prepare('SELECT id, dog_name, line, mode, owner_email, screen_result, created_at, is_test, card_key, story_key FROM entries WHERE status = \'pending\' ORDER BY created_at ASC LIMIT 50').all();
   const { results: reqs } = await env.DB.prepare('SELECT id, text, email, created_at FROM requests WHERE status = \'new\' ORDER BY created_at DESC LIMIT 50').all();
   const { results: liveRows } = await env.DB.prepare('SELECT id, dog_name, line, owner_email, hearts, live_at, is_test FROM entries WHERE status = \'live\' ORDER BY live_at DESC LIMIT 50').all();
@@ -1074,6 +1271,7 @@ ${stalled.length ? `<ul class="small">${stalled.map((o) => `<li><a href="mailto:
 <h2>Switches</h2>
 <form onsubmit="return saveSettings(event)">
 <p><label>Dog of the day (entry id, blank = automatic) <input name="dog_of_the_day" value="${h(s.dogOfTheDay)}" size="10"/></label></p>
+<p class="small">Today: ${dotdToday ? `<a href="/d/${h(dotdToday.id)}">${h(dotdToday.dog_name)}</a>` : 'nobody yet'} · Next in line: ${dotdNext ? h(dotdNext.dog_name) : 'nobody'} · Phones with morning notes: ${pushPhones}</p>
 <p><label>Terms version recorded on new posts <input name="terms_version" value="${h(s.termsVersion)}" size="28"/></label></p>
 <p><label><input type="checkbox" name="notify_live"${s.notifyLive ? ' checked' : ''}/> Email me each time a dog goes live (the “needs your look” note always comes)</label></p>
 <p><button class="btn" type="submit">Save</button> <span class="small" id="saved"></span></p>
@@ -1124,11 +1322,12 @@ async function daily(env) {
   const requests = (await q('SELECT COUNT(*) AS n FROM requests WHERE status = \'new\'')).n;
   const weekFails = (await q('SELECT COUNT(*) AS n FROM failures WHERE at > ?', since)).n;
   const heartNotes = (await q('SELECT COUNT(*) AS n FROM notices WHERE kind = \'hearts\' AND status = \'sent\' AND sent_at > ?', since)).n;
+  const phones = (await q('SELECT COUNT(*) AS n FROM push_subs')).n;
   const isMonday = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', weekday: 'short' }).format(new Date()) === 'Mon';
   if (isMonday && env.CONTACT_EMAIL) {
     await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'digest', subject: 'Dedication Wall, this week',
-      text: `New dogs on the wall: ${newLive}\nWaiting in the queue: ${pending}\nHearts so far: ${hearts}\nEvening notes sent: ${heartNotes}\nBackground requests open: ${requests}\nFailures this week: ${weekFails}\n\nAdmin: ${site(env)}/admin`,
-      html: `<p>New dogs on the wall: <strong>${newLive}</strong><br>Waiting in the queue: <strong>${pending}</strong><br>Hearts so far: ${hearts}<br>Evening notes sent: ${heartNotes}<br>Background requests open: ${requests}<br>Failures this week: ${weekFails}</p><p><a href="${site(env)}/admin">Admin</a></p>` });
+      text: `New dogs on the wall: ${newLive}\nWaiting in the queue: ${pending}\nHearts so far: ${hearts}\nEvening notes sent: ${heartNotes}\nPhones with morning notes: ${phones}\nBackground requests open: ${requests}\nFailures this week: ${weekFails}\n\nAdmin: ${site(env)}/admin`,
+      html: `<p>New dogs on the wall: <strong>${newLive}</strong><br>Waiting in the queue: <strong>${pending}</strong><br>Hearts so far: ${hearts}<br>Evening notes sent: ${heartNotes}<br>Phones with morning notes: ${phones}<br>Background requests open: ${requests}<br>Failures this week: ${weekFails}</p><p><a href="${site(env)}/admin">Admin</a></p>` });
   }
 }
 
