@@ -411,6 +411,6 @@ Photograph; Jetson removed (ChatGPT, 1086×1448), FSRCNN 2×, 9:16 cut · three 
 
 ## Where everything lives
 
-- Repo `natchezpress/your-dogs-journey`, `assets/backgrounds/`: 53 WebPs, `backgrounds.json`, `sources.tsv`, README.
+- Repo `natchezpress/dedication-wall` (named your-dogs-journey until 11/13/26), `assets/backgrounds/`: 53 WebPs, `backgrounds.json`, `sources.tsv`, README.
 - Drive STAGING › DedicationWall_Backgrounds: `00_Source_Photos` (the six ChatGPT fills), `02_Final_2K` (53 PNG masters + manifest), `03_Prompts` (v4–v7).
 - Midjourney folder “Dedication Wall”: every job, keepers and rejects, untouched.

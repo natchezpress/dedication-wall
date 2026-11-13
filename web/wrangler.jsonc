@@ -3,6 +3,8 @@
   // Built by Workers Builds on every push (root web/, `npm run build`, `npx wrangler deploy` on main,
   // `npx wrangler preview` on every other branch). The static maker is served from ./dist through the
   // ASSETS binding; worker.js answers everything else.
+  // The repository is natchezpress/dedication-wall (renamed from your-dogs-journey on 11/13/26). The Worker
+  // keeps the name below, which its workers.dev and preview addresses are built from.
   "name": "your-dogs-journey",
   "main": "src/worker.js",
   "compatibility_date": "2026-10-01",
