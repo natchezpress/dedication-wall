@@ -290,3 +290,69 @@ export async function suggestLines(env, { mode, name, about }) {
     return { ok: false, error: String(e).slice(0, 120) };
   }
 }
+
+// ---------- web push (RFC 8291 message encryption, RFC 8292 VAPID) ----------
+// No outside service: the Worker encrypts each note for the phone's own keys and signs a short token
+// with the site's push key, then posts it to the phone's push service (Apple, Google, Mozilla, Microsoft).
+export function b64uEncode(buf) {
+  const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+export function b64uDecode(str) {
+  let s = String(str).replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+}
+const join = (...parts) => {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
+};
+async function hkdf(salt, ikm, info, bytes) {
+  const key = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info }, key, bytes * 8));
+}
+// The site's push key pair, made once and kept (public: raw point, base64url; private: JWK text).
+export async function newVapidKeys() {
+  const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  return {
+    publicKey: b64uEncode(await crypto.subtle.exportKey('raw', kp.publicKey)),
+    privateJwk: JSON.stringify(await crypto.subtle.exportKey('jwk', kp.privateKey)),
+  };
+}
+export async function vapidJwt({ privateJwk, audience, subject, ttl = 12 * 3600 }) {
+  const key = await crypto.subtle.importKey('jwk', JSON.parse(privateJwk), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  const part = (o) => b64uEncode(enc.encode(JSON.stringify(o)));
+  const unsigned = `${part({ typ: 'JWT', alg: 'ES256' })}.${part({ aud: audience, exp: Math.floor(Date.now() / 1000) + ttl, sub: subject })}`;
+  const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, enc.encode(unsigned));
+  return `${unsigned}.${b64uEncode(sig)}`;
+}
+// One record, aes128gcm: salt(16) · record size(4) · key length(1) · our one-time public key(65) · ciphertext.
+export async function encryptPush({ p256dh, auth, payload, salt = crypto.getRandomValues(new Uint8Array(16)) }) {
+  const uaPub = b64uDecode(p256dh);
+  const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const asPub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+  const uaKey = await crypto.subtle.importKey('raw', uaPub, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: uaKey }, kp.privateKey, 256));
+  const ikm = await hkdf(b64uDecode(auth), shared, join(enc.encode('WebPush: info\0'), uaPub, asPub), 32);
+  const cek = await hkdf(salt, ikm, enc.encode('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = await hkdf(salt, ikm, enc.encode('Content-Encoding: nonce\0'), 12);
+  const aes = await crypto.subtle.importKey('raw', cek, 'AES-GCM', false, ['encrypt']);
+  const body = typeof payload === 'string' ? enc.encode(payload) : payload;
+  const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, aes, join(body, new Uint8Array([2]))));
+  const rs = new Uint8Array(4); new DataView(rs.buffer).setUint32(0, 4096);
+  return join(salt, rs, new Uint8Array([asPub.length]), asPub, sealed);
+}
+// Returns the push service's HTTP status (201 delivered; 404/410 the phone is gone).
+export async function sendPush(sub, payload, vapid, subject) {
+  const body = await encryptPush({ p256dh: sub.p256dh, auth: sub.auth, payload: JSON.stringify(payload) });
+  const jwt = await vapidJwt({ privateJwk: vapid.privateJwk, audience: new URL(sub.endpoint).origin, subject });
+  const r = await fetch(sub.endpoint, {
+    method: 'POST', body,
+    headers: { TTL: '43200', Urgency: 'normal', 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream', Authorization: `vapid t=${jwt}, k=${vapid.publicKey}` },
+  });
+  return r.status;
+}
