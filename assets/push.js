@@ -1,5 +1,6 @@
-// "Meet the Dog of the Day each morning": a small panel that asks once, then one notification a day at
-// 9 a.m. the phone's own time (the phone's time zone goes along with the subscription).
+// "Meet the Dog of the Week every Monday": a small panel that asks once, then one notification on Monday
+// mornings at 9 a.m. the phone's own time (the phone's time zone goes along with the subscription). The
+// words follow the wall's admin switch (/api/config says weekly or daily; 11/13: weekly while it's small).
 // iPhones can only ask inside the home-screen app (iOS 16.4 and later); Android phones can ask in the
 // browser too. "Not now" hides it for two weeks. A phone that already said yes is kept in sync quietly.
 (function () {
@@ -7,6 +8,21 @@
   var android = /Android/.test(navigator.userAgent);
   var standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
   function ev(name, p) { try { gtag('event', name, p || {}); } catch (e) { /* no analytics */ } }
+  // Asked only when a panel is about to show, so most page views send nothing extra.
+  function words() {
+    return fetch('/api/config', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return {}; }).then(function (c) {
+      var d = new Date();
+      return c.dotd === 'daily' ? {
+        card: 'Get the Dog of the Day on your phone each morning.', when: 'One notification at 9 a.m. your time, nothing else.',
+        head: 'Meet the Dog of the Day each morning.', msg: 'One notification at 9 a.m. your time, like a text: that day’s dog and the start of its dedication. Tap it to see the dog and leave a heart. Nothing else.',
+        set: 'You’re set. A hello is on its way, and the first Dog of the Day arrives ' + (d.getHours() < 9 ? 'this morning' : 'tomorrow') + ' at 9 a.m.',
+      } : {
+        card: 'Get the Dog of the Week on your phone every Monday.', when: 'One notification on Monday mornings at 9 a.m. your time, nothing else.',
+        head: 'Meet the Dog of the Week every Monday.', msg: 'One notification on Monday mornings at 9 a.m. your time, like a text: that week’s dog and the start of its dedication. Tap it to see the dog and leave a heart. Nothing else.',
+        set: 'You’re set. A hello is on its way, and the first Dog of the Week arrives ' + (d.getDay() === 1 && d.getHours() < 9 ? 'this morning' : 'Monday') + ' at 9 a.m.',
+      };
+    });
+  }
   // In an iPhone browser the notes can't be turned on yet: the wall has to be on the home screen first.
   // Right after a visitor hearts a dog, a card shows the two steps for the browser they're in.
   if (ios && !standalone) { homeCard(); return; }
@@ -14,6 +30,9 @@
     if (!document.querySelector('.dog[data-hearted]')) return;
     var KEY = 'dw_home_card';
     try { if (Date.now() - (Number(localStorage.getItem(KEY)) || 0) < 14 * 86400000) return; } catch (e) { /* private mode */ }
+    words().then(function (w) { homeCardShow(w, KEY); });
+  }
+  function homeCardShow(w, KEY) {
     var ua = navigator.userAgent;
     var kind = /FBAN|FBAV|FB_IAB|Instagram|Line\/|GSA\/|Snapchat|Pinterest|LinkedInApp/.test(ua) ? 'inapp'
       : /CriOS/.test(ua) ? 'chrome'
@@ -36,10 +55,10 @@
     box.setAttribute('role', 'region'); box.setAttribute('aria-label', 'Put the wall on your phone');
     box.style.cssText = 'background:#fffaf2;border:1px solid #e3d8c6;border-radius:16px;padding:14px 16px;margin:16px 0;color:#2b2622;line-height:1.45;font-size:15px';
     box.innerHTML = '<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px"><img src="/email/dog-tile.png" width="44" height="44" alt="" style="flex:none;border-radius:10px">'
-      + '<p style="margin:0;font-size:17px;line-height:1.3"><strong>Get the Dog of the Day on your phone each morning.</strong></p></div>'
+      + '<p style="margin:0;font-size:17px;line-height:1.3"><strong>' + w.card + '</strong></p></div>'
       + '<p style="margin:0 0 6px">Put the wall on your home screen in two steps:</p>'
       + '<ol style="margin:0 0 6px;padding-left:22px"><li style="margin-bottom:4px">' + steps[0] + '</li><li style="margin-bottom:4px">' + steps[1] + '</li></ol>'
-      + '<p style="margin:0 0 4px">Then open the wall from its new icon and tap <strong>Turn on</strong>. One notification at 9 a.m. your time, nothing else.</p>'
+      + '<p style="margin:0 0 4px">Then open the wall from its new icon and tap <strong>Turn on</strong>. ' + w.when + '</p>'
       + '<p style="margin:0 0 10px;font-size:13px;color:#6f665d">Don’t see Add to Home Screen? Scroll down the list.</p>'
       + '<button type="button" id="home-card-ok" style="font:inherit;font-size:15px;border-radius:999px;padding:8px 16px;cursor:pointer;border:1px solid #1f2a44;background:transparent;color:#1f2a44">Got it</button>';
     var after = document.getElementById('share') || document.querySelector('.dog .row') || document.querySelector('.top');
@@ -60,14 +79,14 @@
     return fetch('/api/push/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) { if (!r.ok) throw new Error('subscribe ' + r.status); });
   }
   var BTN = 'font:inherit;font-size:16px;border-radius:999px;padding:10px 18px;cursor:pointer;border:1px solid #1f2a44;';
-  function panel(reg) {
+  function panel(reg, w) {
     var box = document.createElement('div');
     box.id = 'push-ask';
     box.setAttribute('role', 'region'); box.setAttribute('aria-label', 'Morning notes');
     box.style.cssText = 'display:flex;gap:14px;align-items:flex-start;background:#fffaf2;border:1px solid #e3d8c6;border-radius:16px;padding:14px 16px;margin:14px 0 18px;color:#2b2622;line-height:1.4';
     box.innerHTML = '<img src="/email/dog-tile.png" width="48" height="48" alt="" style="flex:none;border-radius:10px">'
-      + '<div style="flex:1"><p style="margin:0 0 4px;font-size:17px"><strong>Meet the Dog of the Day each morning.</strong></p>'
-      + '<p id="push-msg" style="margin:0 0 10px;font-size:15px;color:#6f665d">One notification at 9 a.m. your time, like a text: that day’s dog and the start of its dedication. Tap it to see the dog and leave a heart. Nothing else.</p>'
+      + '<div style="flex:1"><p style="margin:0 0 4px;font-size:17px"><strong>' + w.head + '</strong></p>'
+      + '<p id="push-msg" style="margin:0 0 10px;font-size:15px;color:#6f665d">' + w.msg + '</p>'
       + '<div id="push-btns" style="display:flex;gap:10px;flex-wrap:wrap"><button type="button" id="push-on" style="' + BTN + 'background:#1f2a44;color:#fff">Turn on</button>'
       + '<button type="button" id="push-later" style="' + BTN + 'background:transparent;color:#1f2a44">Not now</button></div></div>';
     var top = document.querySelector('.top');
@@ -91,7 +110,7 @@
           return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytes(j.key) });
         }).then(function (sub) { return send(sub, true); })]).then(function () {
           try { sessionStorage.setItem(SYNCED, '1'); } catch (e) { /* private mode */ }
-          done('You’re set. A hello is on its way, and the first Dog of the Day arrives ' + (new Date().getHours() < 9 ? 'this morning' : 'tomorrow') + ' at 9 a.m.', 8000);
+          done(w.set, 8000);
           ev('push_on', { phone: ios ? 'iphone' : 'android' });
         });
       }).catch(function (err) {
@@ -112,7 +131,7 @@
       var later = 0;
       try { later = Number(localStorage.getItem(LATER)) || 0; } catch (e) { /* private mode */ }
       if (Date.now() - later < 14 * 86400000) return;
-      panel(reg);
+      return words().then(function (w) { panel(reg, w); });
     });
   }).catch(function () { /* no service worker here */ });
 })();

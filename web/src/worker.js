@@ -73,8 +73,8 @@ export default {
   },
 
   // Hourly. The 13:00 UTC tick runs the daily jobs (7 a.m. Central in winter, 8 in summer), as the old
-  // once-a-day trigger did. Every tick also checks the morning job (9 and 10 a.m. Central: Dog of the Day
-  // email and notifications) and the evening notes (6, 7 and 8 p.m.); each only acts in its own hours.
+  // once-a-day trigger did. Every tick also checks the morning job (9 and 10 a.m.: the Dog of the Week's
+  // email and notifications on Mondays, or every day when the admin switch says daily) and the evening notes (6, 7 and 8 p.m.); each only acts in its own hours.
   async scheduled(event, env, ctx) {
     const at = event.scheduledTime || Date.now();
     if (new Date(at).getUTCHours() === 13) ctx.waitUntil(daily(env));
@@ -91,6 +91,7 @@ async function settings(env) {
     termsVersion: s.terms_version || TERMS_VERSION_FALLBACK,
     dogOfTheDay: s.dog_of_the_day || '',
     notifyLive: (s.notify_live ?? 'true') !== 'false',
+    dotdCadence: s.dotd_cadence === 'daily' ? 'daily' : 'weekly',
   };
 }
 
@@ -162,7 +163,7 @@ async function health(env) {
 async function config(env, request) {
   const s = await settings(env);
   const sess = await readSession(secret(env), request.headers.get('cookie'));
-  const out = { posting: postingOn(env), terms_version: s.termsVersion, signed_in: sess ? sess.email : null };
+  const out = { posting: postingOn(env), terms_version: s.termsVersion, signed_in: sess ? sess.email : null, dotd: s.dotdCadence };
   if (await adminAuth(env, request, new URL(request.url))) out.admin = true;
   return json(out);
 }
@@ -361,31 +362,32 @@ async function deletePhotos(env, e) {
 // Putting the wall on a phone, for emails (which can't tell the phone or browser, so each gets its two
 // steps). 11/13: iOS 26 Safari hides Share under ••• next to the address; Chrome on iPhone keeps Share in
 // the address bar; Android Chrome puts it under ⋮.
-function homeStepsText(env) {
+function homeStepsText(env, f = feature()) {
   return `Open ${site(env)} on your phone, then:
 iPhone, Safari: 1. Tap ••• next to the address, then Share. 2. Tap Add to Home Screen, then Add.
 iPhone, Chrome: 1. Tap the Share icon at the top right of the address bar. 2. Tap Add to Home Screen, then Add.
 Android: 1. Tap ⋮ at the top right. 2. Tap Add to Home screen.
-Then open the Dedication Wall from its new icon and tap Turn on to get the Dog of the Day each morning at 9, your time.`;
+Then open the Dedication Wall from its new icon and tap Turn on to ${f.get}.`;
 }
-function homeStepsHtml(env, src) {
+function homeStepsHtml(env, src, f = feature()) {
   const open = `${site(env)}/?utm_source=${src}&utm_medium=email&utm_campaign=ops-57`;
   return `<p style="margin:0 0 6px"><a href="${open}">Open the wall on your phone</a>, then:</p>
 <p style="margin:0 0 6px"><strong>iPhone, Safari:</strong> 1. Tap ••• next to the address, then Share. 2. Tap Add to Home Screen, then Add.<br>
 <strong>iPhone, Chrome:</strong> 1. Tap the Share icon at the top right of the address bar. 2. Tap Add to Home Screen, then Add.<br>
 <strong>Android:</strong> 1. Tap ⋮ at the top right. 2. Tap Add to Home screen.</p>
-<p style="margin:0">Then open the Dedication Wall from its new icon and tap <strong>Turn on</strong> to get the Dog of the Day each morning at 9, your time.</p>`;
+<p style="margin:0">Then open the Dedication Wall from its new icon and tap <strong>Turn on</strong> to ${f.get}.</p>`;
 }
 
 async function notifyLive(env, e) {
+  const f = feature((await settings(env)).dotdCadence);
   const page = `${site(env)}/d/${e.id}`;
   const inviteUrl = `${site(env)}/i/${e.invite_code}?utm_source=share&utm_medium=referral&utm_campaign=ops-57`;
   const inviteForm = `${page}?k=${await inviteKey(env, e.id)}`;
   const removeUrl = `${site(env)}/api/remove?id=${e.id}&key=${await sha256(`${secret(env)}|remove|${e.id}`)}`;
   await sendMail(env, { to: e.owner_email, kind: 'live', entry_id: e.id,
     subject: `${e.dog_name} is on the wall`,
-    text: `${e.dog_name}’s dedication is live:\n${page}\n\nShare this link so friends can see it and leave a heart:\n${inviteUrl}\n\nInvite up to five friends by email (we send one short note and keep no addresses):\n${inviteForm}\n\nKeep the wall on your phone, so you can easily come back, see who’s new, and meet the Dog of the Day each morning. ${homeStepsText(env)}\n\nTo take it down at any time:\n${removeUrl}`,
-    html: branded(env, `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p><strong>Keep the wall on your phone</strong>, so you can easily come back, see who’s new, and meet the Dog of the Day each morning.</p>${homeStepsHtml(env, 'live-email')}<p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>`) });
+    text: `${e.dog_name}’s dedication is live:\n${page}\n\nShare this link so friends can see it and leave a heart:\n${inviteUrl}\n\nInvite up to five friends by email (we send one short note and keep no addresses):\n${inviteForm}\n\nKeep the wall on your phone, so you can easily come back, see who’s new, and ${f.meet}. ${homeStepsText(env, f)}\n\nTo take it down at any time:\n${removeUrl}`,
+    html: branded(env, `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p><strong>Keep the wall on your phone</strong>, so you can easily come back, see who’s new, and ${f.meet}.</p>${homeStepsHtml(env, 'live-email', f)}<p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>`) });
 }
 
 // ---------------------------------------------------------------- evening notes (hearts and new dogs)
@@ -405,6 +407,7 @@ async function eveningNotes(env, ts = Date.now()) {
   const day = centralDay(ts), hour = centralHour(ts), at = Math.floor(ts / 1000);
   const pending = (await env.DB.prepare('SELECT value FROM settings WHERE key = \'heart_catchup\'').first())?.value === 'pending';
   let kind = null;
+  const f = feature((await settings(env)).dotdCadence);
   if (pending && hour >= NOTE_CATCHUP[0] && hour < NOTE_CATCHUP[1]) kind = 'catchup';
   else if (hour >= NOTE_EVENING[0] && hour < NOTE_EVENING[1]) kind = 'daily';
   if (!kind) return [];
@@ -431,7 +434,7 @@ async function eveningNotes(env, ts = Date.now()) {
         key = (await sha256(`${secret(env)}|hearts|${o.email}`)).slice(0, 32);
         await env.DB.prepare('UPDATE owners SET mail_key = ? WHERE email = ?').bind(key, o.email).run();
       }
-      const m = noteBody(env, { kind, dogs, news, key, mine, tell: kind === 'daily' && !o.told_morning });
+      const m = noteBody(env, { kind, dogs, news, key, mine, tell: kind === 'daily' && !o.told_morning, f });
       await env.DB.prepare('UPDATE owners SET heart_mail_day = ? WHERE email = ?').bind(day, o.email).run();
       const r = await sendMail(env, { to: o.email, kind: 'hearts', entry_id: (dogs[0] || mine[0]).id, subject: m.subject, text: m.text, html: m.html,
         headers: { 'List-Unsubscribe': `<${m.off}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } });
@@ -450,8 +453,8 @@ async function eveningNotes(env, ts = Date.now()) {
   return out;
 }
 
-// tell: open with the one-time "New: the Dog of the Day on your phone" section (once per owner).
-function noteBody(env, { kind, dogs, news, key, mine = dogs, tell = false }) {
+// tell: open with the one-time "New: the Dog of the Week on your phone" section (once per owner).
+function noteBody(env, { kind, dogs, news, key, mine = dogs, tell = false, f = feature() }) {
   const src = kind === 'catchup' ? 'heart-catchup' : 'heart-email';
   const utm = (s) => `utm_source=${s}&utm_medium=email&utm_campaign=ops-57`;
   const off = `${site(env)}/api/hearts?k=${key}`;
@@ -533,8 +536,8 @@ function noteBody(env, { kind, dogs, news, key, mine = dogs, tell = false }) {
       + `<p>${btn(wall, 'See the whole wall')}</p>`;
   }
   if (tell) {
-    text = `New: the Dog of the Day on your phone. Each morning at 9, your time, one notification with that day’s dog. Put the wall on your phone in two steps.\n${homeStepsText(env)}\n\n${text}`;
-    inner = `<div style="background:#fffaf2;border:1px solid #e3d8c6;border-radius:14px;padding:14px 16px;margin:0 0 20px;font-size:15px;line-height:1.5"><p style="margin:0 0 8px;font-size:17px"><strong>New: the Dog of the Day on your phone.</strong> Each morning at 9, your time, one notification with that day’s dog. Put the wall on your phone in two steps.</p>${homeStepsHtml(env, 'news-push')}</div>${inner}`;
+    text = `${f.tellHead} ${f.tellBody} Put the wall on your phone in two steps.\n${homeStepsText(env, f)}\n\n${text}`;
+    inner = `<div style="background:#fffaf2;border:1px solid #e3d8c6;border-radius:14px;padding:14px 16px;margin:0 0 20px;font-size:15px;line-height:1.5"><p style="margin:0 0 8px;font-size:17px"><strong>${f.tellHead}</strong> ${f.tellBody} Put the wall on your phone in two steps.</p>${homeStepsHtml(env, 'news-push', f)}</div>${inner}`;
   }
   return { subject, text: text + foot, html: wrap(inner), off };
 }
@@ -700,12 +703,36 @@ async function remove(env, request) {
   return html(simplePage({ title: 'Removed', bodyHtml: '<p>The dedication is off the wall, and its photos are deleted. <a href="/">Make another any time.</a></p>', noindex: true }));
 }
 
-// ---------------------------------------------------------------- Dog of the Day
-// One dog per Central day, kept in dotd_log so the wall, the dog's page, the email and the morning note
-// all agree. Brock's admin override (settings dog_of_the_day) wins while it's set. Otherwise a rotation:
-// dogs that have never had a day go first, in the order they joined the wall; once every dog has had one,
-// the dog whose last day is longest ago. Main-wall dogs only (In Memory has no Dog of the Day); never a
-// test entry. If the day's dog comes down, the next in line takes the rest of the day.
+// ---------------------------------------------------------------- Dog of the Week (or of the Day)
+// 11/13: with eight dogs on the wall the daily pick came round about every eight days, and a morning
+// notification that keeps showing the same dogs teaches people to ignore it, so Brock went weekly while
+// the wall is small: a new dog each Monday (Central), the notification Monday mornings, the dog's person
+// emailed that Monday. The admin switch (settings dotd_cadence) puts it back to daily. Every word people
+// see about it comes from feature(), so the wall, the dog's page, the emails and the notifications agree.
+function feature(cadence = 'weekly') {
+  return cadence === 'daily' ? {
+    weekly: false, name: 'Dog of the Day', current: 'today’s Dog of the Day', Current: 'Today’s Dog of the Day', span: 'day', when: 'today',
+    meet: 'meet the Dog of the Day each morning', get: 'get the Dog of the Day each morning at 9, your time',
+    tellHead: 'New: the Dog of the Day on your phone.', tellBody: 'Each morning at 9, your time, one notification with that day’s dog.',
+    welcome: 'Each morning at 9, your time: the Dog of the Day. One notification a day, nothing else.',
+  } : {
+    weekly: true, name: 'Dog of the Week', current: 'this week’s Dog of the Week', Current: 'This week’s Dog of the Week', span: 'week', when: 'this week',
+    meet: 'meet the Dog of the Week every Monday', get: 'get the Dog of the Week every Monday at 9, your time',
+    tellHead: 'New: the Dog of the Week on your phone.', tellBody: 'Every Monday at 9, your time, one notification with that week’s dog.',
+    welcome: 'Every Monday at 9, your time: the Dog of the Week. One notification a week, nothing else.',
+  };
+}
+const dayAdd = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const weekday = (day) => new Date(Date.parse(`${day}T12:00:00Z`)).getUTCDay(); // 0 Sunday, 1 Monday …
+const weekStart = (day) => dayAdd(day, -((weekday(day) + 6) % 7));            // that week's Monday
+const periodStart = (cadence, day) => (cadence === 'daily' ? day : weekStart(day));
+
+// One dog per period (a Central day, or a week starting Monday), kept in dotd_log under the period's first
+// day so the wall, the dog's page, the email and the notification all agree. Brock's admin override
+// (settings dog_of_the_day) wins while it's set. Otherwise a rotation: dogs that have never had a turn go
+// first, in the order they joined the wall; once every dog has had one, the dog whose last turn is longest
+// ago. Main-wall dogs only (In Memory has none); never a test entry. If the dog comes down, the next in
+// line takes the rest of the period. A week that began daily keeps the dog already picked most recently.
 const DOTD_COLS = 'e.id, e.dog_name, e.line, e.mode, e.card_key, e.owner_email, e.invite_code, e.hearts';
 async function nextInLine(env, day) {
   return env.DB.prepare(`SELECT e.id FROM entries e
@@ -715,27 +742,29 @@ async function nextInLine(env, day) {
 }
 async function dogOfTheDay(env, day = centralDay()) {
   const s = await settings(env);
+  const key = periodStart(s.dotdCadence, day);
   if (s.dogOfTheDay) {
     const e = await env.DB.prepare(`SELECT ${DOTD_COLS} FROM entries e WHERE e.id = ? AND e.status = 'live'`).bind(s.dogOfTheDay).first();
     if (e) {
       await env.DB.prepare('INSERT INTO dotd_log (day, entry_id, picked_at) VALUES (?,?,?) ON CONFLICT(day) DO UPDATE SET entry_id = excluded.entry_id WHERE dotd_log.entry_id != excluded.entry_id AND dotd_log.mailed_at IS NULL')
-        .bind(day, e.id, now()).run();
+        .bind(key, e.id, now()).run();
       return e;
     }
   }
-  const have = await env.DB.prepare(`SELECT ${DOTD_COLS} FROM dotd_log d JOIN entries e ON e.id = d.entry_id WHERE d.day = ? AND e.status = 'live'`).bind(day).first();
+  const have = await env.DB.prepare(`SELECT ${DOTD_COLS} FROM dotd_log d JOIN entries e ON e.id = d.entry_id WHERE d.day >= ? AND d.day <= ? AND e.status = 'live' ORDER BY d.day DESC LIMIT 1`).bind(key, day).first();
   if (have) return have;
-  const pick = await nextInLine(env, day);
+  const pick = await nextInLine(env, key);
   if (!pick) return null;
   await env.DB.prepare('INSERT INTO dotd_log (day, entry_id, picked_at) VALUES (?,?,?) ON CONFLICT(day) DO UPDATE SET entry_id = excluded.entry_id, picked_at = excluded.picked_at')
-    .bind(day, pick.id, now()).run();
+    .bind(key, pick.id, now()).run();
   return env.DB.prepare(`SELECT ${DOTD_COLS} FROM entries e WHERE e.id = ?`).bind(pick.id).first();
 }
 const centralTomorrow = (ts = Date.now()) => centralDay(ts + 26 * 3600 * 1000 - centralHour(ts) * 3600 * 1000);
 
-// ---------------------------------------------------------------- the morning: Dog of the Day goes out
-// The dog's person gets one email at the 9 or 10 a.m. Central tick (the dog's picture and a one-tap
-// share). Phones get their notification at 9 a.m. their own time (11/13: people could be anywhere), so
+// ---------------------------------------------------------------- the morning: the featured dog goes out
+// On the first morning of its period (Monday, when weekly) the dog's person gets one email at the 9 or
+// 10 a.m. Central tick (the dog's picture and a one-tap share). Phones get their notification that morning
+// at 9 a.m. their own time (11/13: people could be anywhere), so
 // every tick checks which time zones have just reached 9, with 10 as the retry. Whatever is Dog of the Day
 // on the wall at that moment is the one they hear about. Each send is claimed first, so a repeated tick
 // never sends twice; a deploy after 11 starts the next morning.
@@ -749,11 +778,12 @@ async function morning(env, ts = Date.now()) {
   const hour = centralHour(ts);
   if (hour >= MORNING[0] && hour < MORNING[1]) {
     const day = centralDay(ts);
+    const f = feature((await settings(env)).dotdCadence);
     const e = await dogOfTheDay(env, day);
-    if (e) {
+    if (e && (!f.weekly || weekday(day) === 1)) {
       Object.assign(out, { day, dog: e.dog_name });
       const claim = await env.DB.prepare('UPDATE dotd_log SET mailed_at = ? WHERE day = ? AND mailed_at IS NULL').bind(now(), day).run();
-      if (claim.meta.changes) out.mail = await dotdOwnerMail(env, e, day);
+      if (claim.meta.changes) out.mail = await dotdOwnerMail(env, e, day, f);
     }
   }
   out.push = await pushMorning(env, ts);
@@ -767,13 +797,13 @@ async function ownerMailKey(env, email, have) {
   return key;
 }
 
-async function dotdOwnerMail(env, e, day) {
+async function dotdOwnerMail(env, e, day, f = feature()) {
   const o = await env.DB.prepare('SELECT email, heart_mail_off, mail_key FROM owners WHERE email = ?').bind(e.owner_email).first();
   if (!o || o.heart_mail_off) return 'off';
   const recent = await env.DB.prepare('SELECT 1 FROM notices WHERE kind = \'dotd\' AND entry_id = ? AND sent_at > ? AND status != \'failed\'').bind(e.id, now() - DOTD_MAIL_GAP).first();
   if (recent) return 'told this month';
   const key = await ownerMailKey(env, o.email, o.mail_key);
-  const m = await dotdMailBody(env, e, key);
+  const m = await dotdMailBody(env, e, key, f);
   const r = await sendMail(env, { to: o.email, kind: 'dotd', entry_id: e.id, subject: m.subject, text: m.text, html: m.html,
     headers: { 'List-Unsubscribe': `<${m.off}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } });
   // It is this person's one email for the day; their evening note's news waits for tomorrow evening.
@@ -781,7 +811,7 @@ async function dotdOwnerMail(env, e, day) {
   return devMode(env) ? { status: r.status, to: o.email, subject: m.subject, text: m.text, html: m.html } : r.status;
 }
 
-async function dotdMailBody(env, e, key) {
+async function dotdMailBody(env, e, key, f = feature()) {
   const s = site(env), dog = e.dog_name;
   const utm = (src, medium = 'email') => `utm_source=${src}&utm_medium=${medium}&utm_campaign=ops-57`;
   const share = `${s}/d/${e.id}?k=${await inviteKey(env, e.id)}&${utm('dotd-email')}#share`;
@@ -790,10 +820,10 @@ async function dotdMailBody(env, e, key) {
   const off = `${s}/api/hearts?k=${key}`;
   const addr = env.POSTAL_ADDRESS || 'Natchez Press LLC, Franklin, Tennessee';
   const btn = (href, label) => `<a href="${href}" style="display:inline-block;background:#1f2a44;color:#fff;text-decoration:none;padding:11px 18px;border-radius:999px">${label}</a>`;
-  const subject = `${dog} is today’s Dog of the Day`;
-  const text = `${dog} is today’s Dog of the Day on the Dedication Wall. Everyone who opens the wall today sees ${dog} first.
+  const subject = `${dog} is ${f.current}`;
+  const text = `${dog} is ${f.current} on the Dedication Wall. Everyone who opens the wall ${f.when} sees ${dog} first.
 
-Share ${dog}’s day. This opens ${dog}’s page, where the Share button sends the picture straight to Facebook, Instagram or a text:
+Share ${dog}’s ${f.span}. This opens ${dog}’s page, where the Share button sends the picture straight to Facebook, Instagram or a text:
 ${share}
 
 Or post the link on Facebook:
@@ -804,16 +834,16 @@ ${off}
 ${dog} stays on the wall either way.
 
 ${addr}`;
-  const html = branded(env, `<p><strong>${h(dog)}</strong> is today’s Dog of the Day on the Dedication Wall. Everyone who opens the wall today sees ${h(dog)} first.</p>
+  const html = branded(env, `<p><strong>${h(dog)}</strong> is ${f.current} on the Dedication Wall. Everyone who opens the wall ${f.when} sees ${h(dog)} first.</p>
 <p><a href="${share}" style="text-decoration:none"><img src="${card}" width="280" alt="${h(dog)}’s dedication" style="display:block;width:280px;max-width:100%;height:auto;border:0;border-radius:14px"></a></p>
-<p>${btn(share, `Share ${h(dog)}’s day`)}</p>
+<p>${btn(share, `Share ${h(dog)}’s ${f.span}`)}</p>
 <p style="font-size:15px">The button opens ${h(dog)}’s page; tap Share there and the picture goes straight to Facebook, Instagram or a text. Or <a href="${fb}">post the link on Facebook</a>.</p>
 <p style="color:#6f665d;font-size:13px">Rather not get these? <a href="${off}">Turn these emails off</a>. ${h(dog)} stays on the wall either way.<br>${h(addr)}</p>`);
   return { subject, text, html, off };
 }
 
 // ---------------------------------------------------------------- morning notes (web push)
-// Phones that asked for the Dog of the Day each morning. iPhones can only ask from the home-screen app;
+// Phones that asked for the featured dog (Monday mornings when weekly). iPhones can only ask from the home-screen app;
 // Android can ask in the browser too. The site's push key pair is made on first use and kept in settings,
 // so there is nothing to set up. Only the big push services are accepted as addresses, so nobody can point
 // the Worker at some other server. A phone the push service says is gone (404/410) is dropped; five
@@ -854,12 +884,15 @@ async function pushOne(env, sub, payload, v) {
 
 async function pushMorning(env, ts) {
   // Which phones' time zones are at 9 (or 10) right now? Phones that never told us count as Central.
+  // Weekly, only the ones where it is Monday.
+  const f = feature((await settings(env)).dotdCadence);
   const { results: zones } = await env.DB.prepare('SELECT DISTINCT COALESCE(tz, ?) AS tz FROM push_subs').bind(HOME_TZ).all();
   const due = [];
   for (const z of zones) {
     const tz = validZone(z.tz) || HOME_TZ;
     const hour = centralHour(ts, tz);
-    if (hour >= MORNING[0] && hour < MORNING[1]) due.push({ tz: z.tz, day: centralDay(ts, tz) });
+    const day = centralDay(ts, tz);
+    if (hour >= MORNING[0] && hour < MORNING[1] && (!f.weekly || weekday(day) === 1)) due.push({ tz: z.tz, day });
   }
   if (!due.length) return { sent: 0 };
   const e = await dogOfTheDay(env, centralDay(ts));
@@ -877,7 +910,7 @@ async function pushMorning(env, ts) {
   const v = await vapid(env);
   const line = e.line.length > 110 ? `${e.line.slice(0, 107).trimEnd()}…` : e.line;
   const payload = {
-    title: `Today’s Dog of the Day: ${e.dog_name}`, body: line, tag: 'dotd',
+    title: f.weekly ? `Dog of the Week: ${e.dog_name}` : `Today’s Dog of the Day: ${e.dog_name}`, body: line, tag: 'dotd',
     url: `/d/${e.id}?utm_source=push&utm_medium=push&utm_campaign=ops-57`,
     image: `${site(env)}/p/${e.id}/card.jpg${picV(e.card_key) ? `?v=${picV(e.card_key)}` : ''}`,
   };
@@ -907,7 +940,8 @@ async function pushSubscribe(env, request, ctx) {
   if (!known && b.welcome) {
     ctx.waitUntil((async () => {
       const v = await vapid(env);
-      await pushOne(env, { endpoint, p256dh, auth }, { title: 'You’re set', body: 'Each morning at 9, your time: the Dog of the Day. One notification a day, nothing else.', tag: 'welcome', url: '/wall?utm_source=push&utm_medium=push&utm_campaign=ops-57' }, v);
+      const f = feature((await settings(env)).dotdCadence);
+      await pushOne(env, { endpoint, p256dh, auth }, { title: 'You’re set', body: f.welcome, tag: 'welcome', url: '/wall?utm_source=push&utm_medium=push&utm_campaign=ops-57' }, v);
     })().catch((err) => console.error('push welcome', err)));
   }
   return json({ ok: true, new: !known });
@@ -924,7 +958,8 @@ async function wall(env, request, memory) {
   const mode = memory ? 'in_memory' : 'for';
   const { results } = await env.DB.prepare('SELECT id, dog_name, line, hearts, card_key FROM entries WHERE status = \'live\' AND mode = ? AND is_test = 0 ORDER BY live_at DESC LIMIT 200').bind(mode).all();
   const dotd = memory ? null : await dogOfTheDay(env);
-  return html(wallPage({ entries: results, dotd, memory, site: site(env) }), 200, { 'cache-control': 'public, max-age=60' });
+  const f = feature((await settings(env)).dotdCadence);
+  return html(wallPage({ entries: results, dotd, memory, site: site(env), feature: f }), 200, { 'cache-control': 'public, max-age=60' });
 }
 
 async function dog(env, request, id) {
@@ -947,7 +982,8 @@ async function dog(env, request, id) {
   }
   const headers = owner ? { 'cache-control': 'no-store' } : { 'cache-control': 'public, max-age=60' };
   const today = e.status === 'live' && e.mode === 'for' ? await dogOfTheDay(env) : null;
-  return html(dogPage({ e, site: site(env), hearted, owner: invite, dotd: today?.id === e.id }), 200, headers);
+  const f = feature((await settings(env)).dotdCadence);
+  return html(dogPage({ e, site: site(env), hearted, owner: invite, dotd: today?.id === e.id, feature: f }), 200, headers);
 }
 
 async function photo(env, request, rest) {
@@ -1243,7 +1279,8 @@ async function admin(env, request, url) {
   if (p === 'settings' && request.method === 'GET') return json({ ok: true, settings: await settings(env) });
   if (p === 'settings' && request.method === 'POST') {
     const b = await request.json().catch(() => ({}));
-    const allowed = ['terms_version', 'dog_of_the_day', 'notify_live'];
+    const allowed = ['terms_version', 'dog_of_the_day', 'notify_live', 'dotd_cadence'];
+    if ('dotd_cadence' in b && !['daily', 'weekly'].includes(String(b.dotd_cadence))) return bad('dotd_cadence is daily or weekly');
     const stmts = [];
     for (const [k, v] of Object.entries(b)) {
       if (!allowed.includes(k)) continue;
@@ -1300,8 +1337,9 @@ async function adminPage(env, request, url) {
   const headers = { 'x-robots-tag': 'noindex, nofollow' };
   if (url.searchParams.get('token')) headers['set-cookie'] = `dw_admin=${await sha256(`${adminToken(env)}|admin`)}; Path=/; Max-Age=${90 * 86400}; HttpOnly; SameSite=Lax; Secure`;
   const s = await settings(env);
+  const f = feature(s.dotdCadence);
   const dotdToday = await dogOfTheDay(env);
-  const nextId = (await nextInLine(env, centralTomorrow()))?.id;
+  const nextId = (await nextInLine(env, f.weekly ? dayAdd(weekStart(centralDay()), 7) : centralTomorrow()))?.id;
   const dotdNext = nextId ? await env.DB.prepare('SELECT dog_name FROM entries WHERE id = ?').bind(nextId).first() : null;
   const pushPhones = (await env.DB.prepare('SELECT COUNT(*) AS n FROM push_subs').first()).n;
   const { results: queue } = await env.DB.prepare('SELECT id, dog_name, line, mode, owner_email, screen_result, created_at, is_test, card_key, story_key FROM entries WHERE status = \'pending\' ORDER BY created_at ASC LIMIT 50').all();
@@ -1323,8 +1361,9 @@ ${liveRows.length ? `<ul class="small">${liveRows.map((e) => `<li><a href="/d/${
 ${stalled.length ? `<ul class="small">${stalled.map((o) => `<li><a href="mailto:${h(o.email)}">${h(o.email)}</a> · asked to sign in ${h(centralDateTime(o.link_sent_at))}${o.links_n > 1 ? ` (${o.links_n} emails that day)` : ''} · ${o.signed_in ? '<strong>signed in</strong>, then stopped' : 'never used the link or code'}</li>`).join('')}</ul>` : '<p class="small">Nobody this week.</p>'}
 <h2>Switches</h2>
 <form onsubmit="return saveSettings(event)">
-<p><label>Dog of the day (entry id, blank = automatic) <input name="dog_of_the_day" value="${h(s.dogOfTheDay)}" size="10"/></label></p>
-<p class="small">Today: ${dotdToday ? `<a href="/d/${h(dotdToday.id)}">${h(dotdToday.dog_name)}</a>` : 'nobody yet'} · Next in line: ${dotdNext ? h(dotdNext.dog_name) : 'nobody'} · Phones with morning notes: ${pushPhones}</p>
+<p><label>Featured dog <select name="dotd_cadence"><option value="weekly"${f.weekly ? ' selected' : ''}>Weekly: Dog of the Week, new each Monday</option><option value="daily"${f.weekly ? '' : ' selected'}>Daily: Dog of the Day</option></select></label></p>
+<p><label>${f.name} (entry id, blank = automatic) <input name="dog_of_the_day" value="${h(s.dogOfTheDay)}" size="10"/></label></p>
+<p class="small">${f.weekly ? 'This week' : 'Today'}: ${dotdToday ? `<a href="/d/${h(dotdToday.id)}">${h(dotdToday.dog_name)}</a>` : 'nobody yet'} · Next in line${f.weekly ? ' (next Monday)' : ''}: ${dotdNext ? h(dotdNext.dog_name) : 'nobody'} · Phones with morning notes: ${pushPhones}</p>
 <p><label>Terms version recorded on new posts <input name="terms_version" value="${h(s.termsVersion)}" size="28"/></label></p>
 <p><label><input type="checkbox" name="notify_live"${s.notifyLive ? ' checked' : ''}/> Email me each time a dog goes live (the “needs your look” note always comes)</label></p>
 <p><button class="btn" type="submit">Save</button> <span class="small" id="saved"></span></p>
