@@ -27,7 +27,7 @@
   <!-- Opening from the home screen, about nine seconds in all (11/13, Brock: a spin about the up-and-down
        axis, smaller, slower, on every phone; a flat silhouette turning looked like a cardboard cut-out,
        “hokey”). The dog
-       sits on a cream medallion with a thin gold rim, and the medallion turns twice like a coin (11/13: “spin one more time”), the other way
+       sits on a cream medallion with a thin gold rim, and the medallion turns once like a coin (11/13: two turns, then “one less turn”), the other way
        round and at one steady speed, slowly (4 seconds a turn, flatter perspective so it doesn't whip past edge-on), there from the first moment (11/13), with a glint of light, in real 3D on a plain box (which every
        phone turns); it stops facing front, holds a beat, and fades into the maker. It plays on each launch
        from the home-screen icon (the manifest opens /?utm_source=homescreen…), once per browser session on
@@ -43,11 +43,11 @@
       background: radial-gradient(circle at 50% 42%, #fffdf8 0%, #f6efe2 62%, #ecdfc8 100%);
       box-shadow: inset 0 0 0 5px #b48a3c, inset 0 0 0 9px #f6efe2, inset 0 0 0 10px rgba(180,138,60,.5), 0 14px 30px rgba(43,38,34,.18);
       transform: perspective(2000px) rotateY(0deg); backface-visibility: visible; -webkit-backface-visibility: visible; will-change: transform;
-      animation: splash-coin 8s linear forwards; }
+      animation: splash-coin 4s linear forwards; }
     #splash .coin svg { display: block; width: 72%; height: auto; margin-top: 6px; }
-    #splash .coin::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,.65) 50%, transparent 65%); transform: translateX(-120%); animation: splash-glint 4s linear 2 forwards; }
+    #splash .coin::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,.65) 50%, transparent 65%); transform: translateX(-120%); animation: splash-glint 4s linear 1 forwards; }
     html.splash-out #splash { animation: splash-fade .45s ease forwards; }
-    @keyframes splash-coin { from { transform: perspective(2000px) rotateY(0deg); } to { transform: perspective(2000px) rotateY(-720deg); } }
+    @keyframes splash-coin { from { transform: perspective(2000px) rotateY(0deg); } to { transform: perspective(2000px) rotateY(-360deg); } }
     @keyframes splash-glint { 0%, 30% { transform: translateX(120%); } 80%, 100% { transform: translateX(-120%); } }
     @keyframes splash-fade { to { opacity: 0; } }
   </style>
@@ -65,8 +65,8 @@
         try { sessionStorage.setItem('dw_splash', '1'); } catch (e) { /* private mode */ }
         var root = document.documentElement;
         root.classList.add('splash');
-        setTimeout(function () { root.classList.add('splash-out'); }, 8350);
-        setTimeout(function () { root.classList.remove('splash', 'splash-out'); }, 8800);
+        setTimeout(function () { root.classList.add('splash-out'); }, 4350);
+        setTimeout(function () { root.classList.remove('splash', 'splash-out'); }, 4800);
       } catch (e) { /* no splash, no harm */ }
     })();
   </script>
