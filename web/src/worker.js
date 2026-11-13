@@ -157,10 +157,14 @@ async function health(env) {
   return json({ ok: true, posting: postingOn(env), entries: t.n, time: now() });
 }
 
+// `admin: true` appears only for Brock (the admin cookie or a session for the admin email), so the maker can
+// show him an Admin link that nobody else ever sees (11/13). /api/config is never cached (json() sends no-store).
 async function config(env, request) {
   const s = await settings(env);
   const sess = await readSession(secret(env), request.headers.get('cookie'));
-  return json({ posting: postingOn(env), terms_version: s.termsVersion, signed_in: sess ? sess.email : null });
+  const out = { posting: postingOn(env), terms_version: s.termsVersion, signed_in: sess ? sess.email : null };
+  if (await adminAuth(env, request, new URL(request.url))) out.admin = true;
+  return json(out);
 }
 
 // ---------------------------------------------------------------- sign-in by magic link
