@@ -26,8 +26,9 @@
   <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-ZQLVEN820R',{send_page_view:true});</script>
   <!-- Opening from the home screen: the black dog turns on the spot, like a figure on a turntable, then
        shrinks and fades into the maker, about three seconds in all (11/13, Brock: smaller, a turntable spin,
-       slower, on every phone). The turn is drawn in plain 2D (he narrows to a sliver and flips, twice), so
-       no phone's 3D quirks can stop it. It plays on each launch from the home-screen icon (the manifest opens
+       slower, on every phone; the flat 2D flip “looks ridiculous”). He turns in real 3D with a little
+       perspective, two turns in one smooth motion that speeds up and settles, on a plain box around the
+       drawing (which every phone turns in 3D). It plays on each launch from the home-screen icon (the manifest opens
        /?utm_source=homescreen…), and on any page with ?splash=1, for trying it in a browser. The cream
        matches the manifest's background, so it follows the phone's own launch screen without a flash. -->
   <style>
@@ -35,7 +36,7 @@
     html.splash #splash { display: flex; }
     html.splash body { overflow: hidden; }
     #splash .grow { width: 38vw; max-width: 210px; opacity: 0; animation: splash-grow 3s ease-in-out forwards; }
-    #splash .turn { animation: splash-turn 2.25s ease-in-out forwards; }
+    #splash .turn { transform: perspective(800px) rotateY(0deg); backface-visibility: visible; -webkit-backface-visibility: visible; will-change: transform; animation: splash-turn 2.3s cubic-bezier(.42, 0, .25, 1) forwards; }
     #splash .turn svg { display: block; width: 100%; height: auto; }
     html.splash-out #splash { animation: splash-fade .45s ease forwards; }
     @keyframes splash-grow {
@@ -45,15 +46,8 @@
       100% { transform: scale(.15); opacity: 0; }
     }
     @keyframes splash-turn {
-      0% { transform: scaleX(1); }
-      12.5% { transform: scaleX(0); }
-      25% { transform: scaleX(-1); }
-      37.5% { transform: scaleX(0); }
-      50% { transform: scaleX(1); }
-      62.5% { transform: scaleX(0); }
-      75% { transform: scaleX(-1); }
-      87.5% { transform: scaleX(0); }
-      100% { transform: scaleX(1); }
+      from { transform: perspective(800px) rotateY(0deg); }
+      to { transform: perspective(800px) rotateY(720deg); }
     }
     @keyframes splash-fade { to { opacity: 0; } }
   </style>
