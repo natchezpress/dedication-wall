@@ -430,6 +430,7 @@ preview.addEventListener('pointermove', (ev) => {
     } else if (dragTarget === 'footer') { state.layout.footerDy += dy; keepLayoutHonest(); }
     else {
       state.photo.view.dx += dx; state.photo.view.dy += dy;
+      if (dy < 0) state.photo.view.tuck = true; // dragged up on purpose: he may tuck behind the words (compose.js)
       // The view keeps the dog's real place (stopped by the words, or held on the card), so dragging back
       // moves him at once; on the book page the photo stays in its frame.
       if (isScene()) { const g = sceneGeometry(master.getContext('2d'), words(), photoForRender()); state.photo.view.dx = g.dogDx; state.photo.view.dy = g.dogDy; }
