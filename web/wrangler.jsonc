@@ -38,7 +38,8 @@
   },
   "triggers": {
     // Hourly. The 13:00 UTC tick (7 a.m. Central in winter, 8 a.m. in summer) runs the daily jobs and the
-    // Monday digest, as before; every tick checks for heart emails, which only go out in their Central hours.
+    // Monday digest, as before; every tick checks for evening notes (hearts and new dogs), which only go
+    // out in their Central hours.
     "crons": ["0 * * * *"]
   },
   "observability": { "enabled": true },

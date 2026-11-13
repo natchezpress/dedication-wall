@@ -52,8 +52,8 @@ export default {
       if (p === '/api/invite' && request.method === 'POST') return sendInvites(env, request);
       if (p === '/api/log' && request.method === 'POST') return pageError(env, request, ctx);
       if (p.startsWith('/api/admin')) return admin(env, request, url);
-      // Local and preview only: run the heart-email tick at a chosen time and see what it sent.
-      if (p === '/api/dev/hearts' && devMode(env)) return json({ ok: true, sent: await heartMail(env, Number(url.searchParams.get('ts')) || Date.now()) });
+      // Local and preview only: run the evening-note tick at a chosen time and see what it sent.
+      if (p === '/api/dev/hearts' && devMode(env)) return json({ ok: true, sent: await eveningNotes(env, Number(url.searchParams.get('ts')) || Date.now()) });
       if (p.startsWith('/api/')) return bad('no such route', 404);
 
       // ----- admin page -----
@@ -69,11 +69,11 @@ export default {
   },
 
   // Hourly. The 13:00 UTC tick runs the daily jobs (7 a.m. Central in winter, 8 in summer), as the old
-  // once-a-day trigger did; every tick checks for heart emails, which only send in their Central hours.
+  // once-a-day trigger did; every tick checks for evening notes (hearts and new dogs), which only send in their Central hours.
   async scheduled(event, env, ctx) {
     const at = event.scheduledTime || Date.now();
     if (new Date(at).getUTCHours() === 13) ctx.waitUntil(daily(env));
-    ctx.waitUntil(heartMail(env, at).catch((err) => console.error('heart mail', err)));
+    ctx.waitUntil(eveningNotes(env, at).catch((err) => console.error('evening notes', err)));
   },
 };
 
@@ -348,50 +348,60 @@ async function notifyLive(env, e) {
     html: `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p><strong>Keep the wall on your phone.</strong> Add it to your home screen so you can easily come back and visit the Dedication Wall, and see who’s new. <a href="${homeUrl}">Open the wall on your phone</a>, then:<br><strong>iPhone:</strong> tap Share, then Add to Home Screen.<br><strong>Android:</strong> tap ⋮, then Add to Home screen.</p><p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>` });
 }
 
-// ---------------------------------------------------------------- heart emails
-// A dog's person hears about hearts. Once, on the first hourly tick after this shipped (7 a.m. to 9 p.m.
-// Central), everyone whose dogs already had hearts got a catch-up note. From then on: one short note on an
-// evening a dog got new hearts (the 6, 7 and 8 p.m. Central ticks), all of a person's dogs in one note,
-// never more than one a day. Hearts that land after the evening's note wait for the next evening.
-// The day is marked even when a send fails (one try a day), but the count only moves on success, so a
-// failed note's hearts roll into the next one. Test entries never mail. Off with one tap.
-const HEART_EVENING = [18, 21];   // Central hours: from, up to (not including)
-const HEART_CATCHUP = [7, 21];
+// ---------------------------------------------------------------- evening notes (hearts and new dogs)
+// Everyone with a dog on the wall hears what happened since their last note: new hearts on their own dogs,
+// and dogs other people put up. Once, on the first hourly tick after heart emails shipped (7 a.m. to 9 p.m.
+// Central), everyone whose dogs already had hearts got a catch-up note about hearts alone. From then on:
+// one short note on an evening there is something to tell (the 6, 7 and 8 p.m. Central ticks), all of a
+// person's news in one note, never more than one a day. Anything that lands after the evening's note waits
+// for the next evening. The day is marked even when a send fails (one try a day); the counters only move
+// on success, so a failed note's news rolls into the next one. Test entries and taken-down dogs never
+// appear, and nobody is told about their own dog. Off with one tap.
+const NOTE_EVENING = [18, 21];   // Central hours: from, up to (not including)
+const NOTE_CATCHUP = [7, 21];
+const NEWS_MAX = 9;              // new dogs pictured in one note (three rows of three); the rest are "and N more"
 
-async function heartMail(env, ts = Date.now()) {
-  const day = centralDay(ts), hour = centralHour(ts);
+async function eveningNotes(env, ts = Date.now()) {
+  const day = centralDay(ts), hour = centralHour(ts), at = Math.floor(ts / 1000);
   const pending = (await env.DB.prepare('SELECT value FROM settings WHERE key = \'heart_catchup\'').first())?.value === 'pending';
   let kind = null;
-  if (pending && hour >= HEART_CATCHUP[0] && hour < HEART_CATCHUP[1]) kind = 'catchup';
-  else if (hour >= HEART_EVENING[0] && hour < HEART_EVENING[1]) kind = 'daily';
+  if (pending && hour >= NOTE_CATCHUP[0] && hour < NOTE_CATCHUP[1]) kind = 'catchup';
+  else if (hour >= NOTE_EVENING[0] && hour < NOTE_EVENING[1]) kind = 'daily';
   if (!kind) return [];
-  const { results } = await env.DB.prepare(`SELECT e.id, e.dog_name, e.hearts, e.hearts_mailed, e.invite_code, e.owner_email, o.mail_key
-    FROM entries e JOIN owners o ON o.email = e.owner_email
-    WHERE e.status = 'live' AND e.is_test = 0 AND e.hearts > e.hearts_mailed
-      AND o.heart_mail_off = 0 AND (o.heart_mail_day IS NULL OR o.heart_mail_day != ?)
-    ORDER BY e.owner_email, e.live_at`).bind(day).all();
-  const byOwner = new Map();
-  for (const r of results) {
-    if (!byOwner.has(r.owner_email)) byOwner.set(r.owner_email, []);
-    byOwner.get(r.owner_email).push(r);
-  }
+  const { results: owners } = await env.DB.prepare(`SELECT email, mail_key, news_at FROM owners
+    WHERE heart_mail_off = 0 AND (heart_mail_day IS NULL OR heart_mail_day != ?)
+      AND EXISTS (SELECT 1 FROM entries WHERE owner_email = owners.email AND status = 'live' AND is_test = 0)
+    ORDER BY email`).bind(day).all();
+  const { results: live } = owners.length ? await env.DB.prepare(`SELECT id, dog_name, line, mode, hearts, hearts_mailed, invite_code, owner_email, live_at, card_key
+    FROM entries WHERE status = 'live' AND is_test = 0 AND live_at IS NOT NULL ORDER BY live_at LIMIT 5000`).all() : { results: [] };
   const out = [];
-  for (const [email, dogs] of byOwner) {
+  for (const o of owners) {
+    const mine = live.filter((e) => e.owner_email === o.email);
+    if (!mine.length) continue;
+    const dogs = mine.filter((e) => e.hearts > e.hearts_mailed);
+    let news = [];
+    if (kind === 'daily') {
+      const since = o.news_at ?? Math.min(...mine.map((e) => e.live_at));
+      news = live.filter((e) => e.owner_email !== o.email && e.live_at > since && e.live_at <= at).reverse(); // newest first, like the wall
+    }
+    if (!dogs.length && !news.length) continue;
     try {
-      let key = dogs[0].mail_key;
+      let key = o.mail_key;
       if (!key) {
-        key = (await sha256(`${secret(env)}|hearts|${email}`)).slice(0, 32);
-        await env.DB.prepare('UPDATE owners SET mail_key = ? WHERE email = ?').bind(key, email).run();
+        key = (await sha256(`${secret(env)}|hearts|${o.email}`)).slice(0, 32);
+        await env.DB.prepare('UPDATE owners SET mail_key = ? WHERE email = ?').bind(key, o.email).run();
       }
-      const m = heartMailBody(env, { kind, dogs, key });
-      await env.DB.prepare('UPDATE owners SET heart_mail_day = ? WHERE email = ?').bind(day, email).run();
-      const r = await sendMail(env, { to: email, kind: 'hearts', entry_id: dogs[0].id, subject: m.subject, text: m.text, html: m.html,
+      const m = noteBody(env, { kind, dogs, news, key, mine });
+      await env.DB.prepare('UPDATE owners SET heart_mail_day = ? WHERE email = ?').bind(day, o.email).run();
+      const r = await sendMail(env, { to: o.email, kind: 'hearts', entry_id: (dogs[0] || mine[0]).id, subject: m.subject, text: m.text, html: m.html,
         headers: { 'List-Unsubscribe': `<${m.off}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } });
       if (r.status !== 'failed') {
-        await env.DB.batch(dogs.map((d) => env.DB.prepare('UPDATE entries SET hearts_mailed = ? WHERE id = ? AND hearts_mailed < ?').bind(d.hearts, d.id, d.hearts)));
+        const done = dogs.map((d) => env.DB.prepare('UPDATE entries SET hearts_mailed = ? WHERE id = ? AND hearts_mailed < ?').bind(d.hearts, d.id, d.hearts));
+        if (kind === 'daily') done.push(env.DB.prepare('UPDATE owners SET news_at = ? WHERE email = ?').bind(at, o.email));
+        if (done.length) await env.DB.batch(done);
       }
-      out.push({ to: email, status: r.status, subject: m.subject, text: m.text, html: m.html });
-    } catch (err) { console.error('heart mail', String(err).slice(0, 160)); }
+      out.push({ to: o.email, status: r.status, subject: m.subject, text: m.text, html: m.html });
+    } catch (err) { console.error('evening note', String(err).slice(0, 160)); }
   }
   if (kind === 'catchup') {
     await env.DB.prepare('UPDATE settings SET value = \'done\', updated_at = ? WHERE key = \'heart_catchup\'').bind(now()).run();
@@ -399,52 +409,91 @@ async function heartMail(env, ts = Date.now()) {
   return out;
 }
 
-function heartMailBody(env, { kind, dogs, key }) {
+function noteBody(env, { kind, dogs, news, key, mine = dogs }) {
   const src = kind === 'catchup' ? 'heart-catchup' : 'heart-email';
-  const utm = `utm_source=${src}&utm_medium=email&utm_campaign=ops-57`;
+  const utm = (s) => `utm_source=${s}&utm_medium=email&utm_campaign=ops-57`;
   const off = `${site(env)}/api/hearts?k=${key}`;
+  const wall = `${site(env)}/wall?${utm('wall-news')}`;
   const addr = env.POSTAL_ADDRESS || 'Natchez Press LLC, Franklin, Tennessee';
   const hearts = (x) => `${x} heart${x === 1 ? '' : 's'}`;
   const and = (xs) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')}, and ${xs[xs.length - 1]}`);
+  const btn = (href, label) => `<a href="${href}" style="display:inline-block;background:#1f2a44;color:#fff;text-decoration:none;padding:11px 18px;border-radius:999px">${label}</a>`;
+  // Pictures: the dog's square card, small. The words on it are too small to read in the email on
+  // purpose; the dedication and the heart button are on the dog's page, one tap away.
+  const card = (e) => `${site(env)}/p/${e.id}/card.jpg${picV(e.card_key) ? `?v=${picV(e.card_key)}` : ''}`;
+  const pic = (e, href, w = 180) => `<a href="${href}" style="text-decoration:none"><img src="${card(e)}" width="${w}" alt="${h(e.dog_name)}" style="display:block;width:${w}px;max-width:100%;height:auto;border:0;border-radius:12px"></a>`;
+  const grid = (items) => {
+    const cells = items.map((it) => `<td width="33%" style="width:33%;padding:0 8px 16px 0;vertical-align:top;text-align:left"><a href="${it.href}" style="text-decoration:none;color:#2b2622"><img src="${card(it.e)}" width="150" alt="${h(it.e.dog_name)}" style="display:block;width:100%;max-width:150px;height:auto;border:0;border-radius:10px"><span style="display:block;font-size:15px;line-height:1.3;margin-top:6px"><strong>${h(it.label)}</strong>${it.note ? `<br><span style="color:#6f665d">${h(it.note)}</span>` : ''}</span></a></td>`);
+    const rowsHtml = [];
+    for (let i = 0; i < cells.length; i += 3) rowsHtml.push(`<tr>${cells.slice(i, i + 3).join('')}${'<td width="33%" style="width:33%"></td>'.repeat(Math.max(0, 3 - cells.slice(i, i + 3).length))}</tr>`);
+    return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;max-width:480px;margin:6px 0 4px">${rowsHtml.join('')}</table>`;
+  };
   const one = dogs.length === 1;
   const d0 = dogs[0];
   const rows = dogs.map((d) => {
     const fresh = d.hearts - d.hearts_mailed;
     const count = kind === 'catchup' ? `${hearts(d.hearts)} so far`
       : fresh === d.hearts ? `${hearts(fresh)}` : `${fresh} new, ${d.hearts} in all`;
-    return { d, fresh, count, page: `${site(env)}/d/${d.id}?${utm}` };
+    return { d, fresh, count, page: `${site(env)}/d/${d.id}?${utm(src)}` };
   });
-  const names = and(dogs.map((d) => d.dog_name));
-  const btn = (href, label) => `<a href="${href}" style="display:inline-block;background:#1f2a44;color:#fff;text-decoration:none;padding:11px 18px;border-radius:999px">${label}</a>`;
-  const wrap = (inner) => `<div style="font-family:Georgia,serif;font-size:17px;line-height:1.5;color:#2b2622">${inner}<p style="color:#6f665d;font-size:13px">Rather not get these? <a href="${off}">Turn heart emails off</a>. ${one ? h(d0.dog_name) : 'Your dogs'} stay${one ? 's' : ''} on the wall either way.<br>${h(addr)}</p></div>`;
-  const foot = `\n\nRather not get these? Turn heart emails off:\n${off}\n${one ? d0.dog_name : 'Your dogs'} stay${one ? 's' : ''} on the wall either way.\n\n${addr}`;
-  let subject, text, inner;
+  // For the footer: their one dog on the wall by name, or "your dogs".
+  const whose = mine.length === 1 ? mine[0].dog_name : 'Your dogs';
+  const foot = `\n\nRather not get these? Turn these emails off:\n${off}\n${whose} stay${whose === 'Your dogs' ? '' : 's'} on the wall either way.\n\n${addr}`;
+  const footHtml = `<p style="color:#6f665d;font-size:13px">Rather not get these? <a href="${off}">Turn these emails off</a>. ${h(whose)} stay${whose === 'Your dogs' ? '' : 's'} on the wall either way.<br>${h(addr)}</p>`;
+  const wrap = (inner) => `<div style="font-family:Georgia,serif;font-size:17px;line-height:1.5;color:#2b2622">${inner}${footHtml}</div>`;
+
+  let subject = '', text = '', inner = '';
   if (kind === 'catchup') {
+    const names = and(dogs.map((d) => d.dog_name));
     const share = `${site(env)}/i/${d0.invite_code}?utm_source=share&utm_medium=referral&utm_campaign=ops-57`;
-    const later = `From here on, we’ll send a short note on any evening ${one ? d0.dog_name : 'your dogs'} get${one ? 's' : ''} new hearts, never more than one a day.`;
+    const later = `From here on, we’ll send a short note on any evening ${one ? d0.dog_name : 'your dogs'} get${one ? 's' : ''} new hearts or a new dog joins the wall, never more than one a day.`;
     subject = `People are leaving hearts for ${names}`;
     if (one) {
-      text = `Since ${d0.dog_name} went up on the Dedication Wall, people have been stopping by and leaving hearts: ${rows[0].count}.\n\nSee ${d0.dog_name}’s page:\n${rows[0].page}\n\nShare ${d0.dog_name}’s link and more friends can leave one:\n${share}\n\n${later}${foot}`;
-      inner = `<p>Since <strong>${h(d0.dog_name)}</strong> went up on the Dedication Wall, people have been stopping by and leaving hearts: <strong>${h(rows[0].count)}</strong>.</p><p>${btn(rows[0].page, `See ${h(d0.dog_name)}’s page`)}</p><p>Share ${h(d0.dog_name)}’s link and more friends can leave one: <a href="${share}">${h(share.split('?')[0])}</a></p><p>${h(later)}</p>`;
+      text = `Since ${d0.dog_name} went up on the Dedication Wall, people have been stopping by and leaving hearts: ${rows[0].count}.\n\nSee ${d0.dog_name}’s page:\n${rows[0].page}\n\nShare ${d0.dog_name}’s link and more friends can leave one:\n${share}\n\n${later}`;
+      inner = `<p>Since <strong>${h(d0.dog_name)}</strong> went up on the Dedication Wall, people have been stopping by and leaving hearts: <strong>${h(rows[0].count)}</strong>.</p>${pic(d0, rows[0].page)}<p>${btn(rows[0].page, `See ${h(d0.dog_name)}’s page`)}</p><p>Share ${h(d0.dog_name)}’s link and more friends can leave one: <a href="${share}">${h(share.split('?')[0])}</a></p><p>${h(later)}</p>`;
     } else {
-      text = `Since your dogs went up on the Dedication Wall, people have been stopping by and leaving hearts:\n\n${rows.map((r) => `${r.d.dog_name}: ${r.count}\n${r.page}`).join('\n\n')}\n\n${later}${foot}`;
-      inner = `<p>Since your dogs went up on the Dedication Wall, people have been stopping by and leaving hearts:</p><p>${rows.map((r) => `<a href="${r.page}"><strong>${h(r.d.dog_name)}</strong></a>: ♥ ${h(r.count)}`).join('<br>')}</p><p>${h(later)}</p>`;
+      text = `Since your dogs went up on the Dedication Wall, people have been stopping by and leaving hearts:\n\n${rows.map((r) => `${r.d.dog_name}: ${r.count}\n${r.page}`).join('\n\n')}\n\n${later}`;
+      inner = `<p>Since your dogs went up on the Dedication Wall, people have been stopping by and leaving hearts:</p>${grid(rows.map((r) => ({ e: r.d, href: r.page, label: r.d.dog_name, note: `♥ ${r.count}` })))}<p>${h(later)}</p>`;
     }
-  } else if (one) {
-    const r = rows[0];
-    subject = `${d0.dog_name} got ${r.fresh === 1 ? 'a new heart' : `${r.fresh} new hearts`}`;
-    const total = r.fresh === d0.hearts ? '' : ` That’s ${hearts(d0.hearts)} in all.`;
-    text = `${d0.dog_name} got ${r.fresh === 1 ? 'a new heart' : `${r.fresh} new hearts`} on the Dedication Wall.${total}\n\nSee ${d0.dog_name}’s page:\n${r.page}${foot}`;
-    inner = `<p><strong>${h(d0.dog_name)}</strong> got ${r.fresh === 1 ? 'a new heart' : `${r.fresh} new hearts`} on the Dedication Wall.${h(total)}</p><p>${btn(r.page, `See ${h(d0.dog_name)}’s page`)}</p>`;
-  } else {
-    subject = `New hearts for ${names}`;
-    text = `New hearts on the Dedication Wall:\n\n${rows.map((r) => `${r.d.dog_name}: ${r.count}\n${r.page}`).join('\n\n')}${foot}`;
-    inner = `<p>New hearts on the Dedication Wall:</p><p>${rows.map((r) => `<a href="${r.page}"><strong>${h(r.d.dog_name)}</strong></a>: ♥ ${h(r.count)}`).join('<br>')}</p>`;
+    return { subject, text: text + foot, html: wrap(inner), off };
   }
-  return { subject, text, html: wrap(inner), off };
+
+  // Hearts on their own dogs.
+  if (dogs.length) {
+    if (one) {
+      const r = rows[0];
+      const got = r.fresh === 1 ? 'a new heart' : `${r.fresh} new hearts`;
+      const total = r.fresh === d0.hearts ? '' : ` That’s ${hearts(d0.hearts)} in all.`;
+      subject = `${d0.dog_name} got ${got}`;
+      text = `${d0.dog_name} got ${got} on the Dedication Wall.${total}\n\nSee ${d0.dog_name}’s page:\n${r.page}`;
+      inner = `<p><strong>${h(d0.dog_name)}</strong> got ${got} on the Dedication Wall.${h(total)}</p>${pic(d0, r.page, news.length ? 120 : 180)}<p>${news.length ? `<a href="${r.page}">See ${h(d0.dog_name)}’s page</a>` : btn(r.page, `See ${h(d0.dog_name)}’s page`)}</p>`;
+    } else {
+      subject = `New hearts for ${and(dogs.map((d) => d.dog_name))}`;
+      text = `New hearts on the Dedication Wall:\n\n${rows.map((r) => `${r.d.dog_name}: ${r.count}\n${r.page}`).join('\n\n')}`;
+      inner = `<p>New hearts on the Dedication Wall:</p>${grid(rows.map((r) => ({ e: r.d, href: r.page, label: r.d.dog_name, note: `♥ ${r.count}` })))}`;
+    }
+  }
+
+  // Dogs other people put up since the last note: their pictures and names. The dedication and the
+  // heart are on each dog's page; that's the reason to tap.
+  if (news.length) {
+    const shown = news.slice(0, NEWS_MAX), extra = news.length - shown.length;
+    const label = (e) => `${e.mode === 'in_memory' ? 'In memory of ' : ''}${e.dog_name}`;
+    const page = (e) => `${site(env)}/d/${e.id}?${utm('wall-news')}`;
+    const named = news.length <= 3 ? and(news.map((e) => e.dog_name)) : `${news[0].dog_name}, ${news[1].dog_name}, and ${news.length - 2} more`;
+    const isNew = news.length === 1 ? `${news[0].dog_name} is new on the wall` : `${news.length <= 3 ? named : `${news.length} dogs`} are new on the wall`;
+    subject = subject ? `${subject}, and ${isNew}` : `New on the wall: ${named}`;
+    const head = dogs.length ? 'Also new on the wall:' : 'New on the wall:';
+    const tap = news.length === 1 ? `Tap ${news[0].dog_name} to read the dedication and leave a heart.` : 'Tap a dog to read the dedication and leave a heart.';
+    text += `${text ? '\n\n' : ''}${head}\n\n${shown.map((e) => `${label(e)}\n${page(e)}`).join('\n\n')}${extra ? `\n\nAnd ${extra} more on the wall:\n${wall}` : ''}\n\n${tap}`;
+    inner += `<p style="margin-bottom:8px">${head}</p>${grid(shown.map((e) => ({ e, href: page(e), label: label(e) })))}`
+      + `<p style="margin-top:0">${h(tap)}${extra ? ` And ${extra} more on the wall.` : ''}</p>`
+      + `<p>${btn(wall, 'See the whole wall')}</p>`;
+  }
+  return { subject, text: text + foot, html: wrap(inner), off };
 }
 
-// The off switch in every heart email. The GET only shows a page with one button, because mail scanners
+// The off switch in every evening note. The GET only shows a page with one button, because mail scanners
 // follow links; the button posts. Mail apps' own one-tap unsubscribe (List-Unsubscribe-Post) posts here too.
 async function heartSwitch(env, request) {
   const url = new URL(request.url);
@@ -452,20 +501,21 @@ async function heartSwitch(env, request) {
   const o = k ? await env.DB.prepare('SELECT email, heart_mail_off FROM owners WHERE mail_key = ?').bind(k).first() : null;
   if (!o) return html(notFoundPage(), 404);
   const action = `/api/hearts?k=${k}`;
+  const onForm = (cls) => `<form method="post" action="${action}"><input type="hidden" name="set" value="on"><button type="submit" class="btn${cls}">Turn them back on</button></form>`;
   if (request.method === 'POST') {
     const form = await request.formData().catch(() => null);
     const want = form?.get('List-Unsubscribe') === 'One-Click' ? 'off' : form?.get('set');
     if (want !== 'off' && want !== 'on') return bad('set needed');
     await env.DB.prepare('UPDATE owners SET heart_mail_off = ? WHERE email = ?').bind(want === 'off' ? 1 : 0, o.email).run();
-    return html(simplePage({ title: want === 'off' ? 'Heart emails are off' : 'Heart emails are on', noindex: true,
+    return html(simplePage({ title: want === 'off' ? 'Emails are off' : 'Emails are on', noindex: true,
       bodyHtml: want === 'off'
-        ? `<p>You won’t get heart emails anymore. Your dogs stay on the wall, and their hearts keep counting.</p><form method="post" action="${action}"><input type="hidden" name="set" value="on"><button type="submit" class="btn quiet">Turn them back on</button></form><p><a href="/wall">See the wall</a></p>`
-        : '<p>You’ll get a short note on any evening your dogs get new hearts, never more than one a day.</p><p><a href="/wall">See the wall</a></p>' }));
+        ? `<p>You won’t get our evening notes anymore. Your dogs stay on the wall, and their hearts keep counting.</p>${onForm(' quiet')}<p><a href="/wall">See the wall</a></p>`
+        : '<p>You’ll get a short note on any evening there’s news: new hearts for your dogs or a new dog on the wall. Never more than one a day.</p><p><a href="/wall">See the wall</a></p>' }));
   }
-  return html(simplePage({ title: o.heart_mail_off ? 'Heart emails are off' : 'Turn heart emails off?', noindex: true,
+  return html(simplePage({ title: o.heart_mail_off ? 'Emails are off' : 'Turn these emails off?', noindex: true,
     bodyHtml: o.heart_mail_off
-      ? `<p>You don’t get heart emails now.</p><form method="post" action="${action}"><input type="hidden" name="set" value="on"><button type="submit" class="btn">Turn them back on</button></form><p><a href="/wall">See the wall</a></p>`
-      : `<p>You’ll stop getting a note when your dogs get new hearts. Your dogs stay on the wall, and their hearts keep counting.</p><form method="post" action="${action}"><input type="hidden" name="set" value="off"><button type="submit" class="btn">Turn heart emails off</button></form><p><a href="/wall">Keep them; see the wall.</a></p>` }));
+      ? `<p>You don’t get our evening notes now.</p>${onForm('')}<p><a href="/wall">See the wall</a></p>`
+      : `<p>You’ll stop getting our evening note about new hearts for your dogs and new dogs on the wall. Your dogs stay on the wall, and their hearts keep counting.</p><form method="post" action="${action}"><input type="hidden" name="set" value="off"><button type="submit" class="btn">Turn these emails off</button></form><p><a href="/wall">Keep them; see the wall.</a></p>` }));
 }
 
 // ---------------------------------------------------------------- email invites
@@ -1067,8 +1117,8 @@ async function daily(env) {
   const isMonday = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', weekday: 'short' }).format(new Date()) === 'Mon';
   if (isMonday && env.CONTACT_EMAIL) {
     await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'digest', subject: 'Dedication Wall, this week',
-      text: `New dogs on the wall: ${newLive}\nWaiting in the queue: ${pending}\nHearts so far: ${hearts}\nHeart emails sent: ${heartNotes}\nBackground requests open: ${requests}\nFailures this week: ${weekFails}\n\nAdmin: ${site(env)}/admin`,
-      html: `<p>New dogs on the wall: <strong>${newLive}</strong><br>Waiting in the queue: <strong>${pending}</strong><br>Hearts so far: ${hearts}<br>Heart emails sent: ${heartNotes}<br>Background requests open: ${requests}<br>Failures this week: ${weekFails}</p><p><a href="${site(env)}/admin">Admin</a></p>` });
+      text: `New dogs on the wall: ${newLive}\nWaiting in the queue: ${pending}\nHearts so far: ${hearts}\nEvening notes sent: ${heartNotes}\nBackground requests open: ${requests}\nFailures this week: ${weekFails}\n\nAdmin: ${site(env)}/admin`,
+      html: `<p>New dogs on the wall: <strong>${newLive}</strong><br>Waiting in the queue: <strong>${pending}</strong><br>Hearts so far: ${hearts}<br>Evening notes sent: ${heartNotes}<br>Background requests open: ${requests}<br>Failures this week: ${weekFails}</p><p><a href="${site(env)}/admin">Admin</a></p>` });
   }
 }
 
