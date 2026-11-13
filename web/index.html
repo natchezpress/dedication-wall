@@ -24,31 +24,30 @@
   <link rel="stylesheet" href="/src/styles.css" />
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-ZQLVEN820R"></script>
   <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-ZQLVEN820R',{send_page_view:true});</script>
-  <!-- Opening from the home screen: the black dog turns on the spot, like a figure on a turntable, then
-       shrinks and fades into the maker, about three seconds in all (11/13, Brock: smaller, a turntable spin,
-       slower, on every phone; the flat 2D flip “looks ridiculous”). He turns in real 3D with a little
-       perspective, two turns in one smooth motion that speeds up and settles, on a plain box around the
-       drawing (which every phone turns in 3D). It plays on each launch from the home-screen icon (the manifest opens
-       /?utm_source=homescreen…), and on any page with ?splash=1, for trying it in a browser. The cream
-       matches the manifest's background, so it follows the phone's own launch screen without a flash. -->
+  <!-- Opening from the home screen, about nine seconds in all (11/13, Brock: a spin about the up-and-down
+       axis, smaller, slower, on every phone; a flat silhouette turning looked like a cardboard cut-out,
+       “hokey”). The dog
+       sits on a cream medallion with a thin gold rim, and the medallion turns twice like a coin (11/13: “spin one more time”), the other way
+       round and at one steady speed, slowly (4 seconds a turn, flatter perspective so it doesn't whip past edge-on), there from the first moment (11/13), with a glint of light, in real 3D on a plain box (which every
+       phone turns); it stops facing front, holds a beat, and fades into the maker. It plays on each launch
+       from the home-screen icon (the manifest opens /?utm_source=homescreen…), and on any page with
+       ?splash=1, for trying it in a browser. The cream matches the manifest's background, so it follows the
+       phone's own launch screen without a flash. -->
   <style>
     #splash { position: fixed; inset: 0; z-index: 9999; display: none; align-items: center; justify-content: center; background: #f7f1e6; pointer-events: none; }
     html.splash #splash { display: flex; }
     html.splash body { overflow: hidden; }
-    #splash .grow { width: 38vw; max-width: 210px; opacity: 0; animation: splash-grow 3s ease-in-out forwards; }
-    #splash .turn { transform: perspective(800px) rotateY(0deg); backface-visibility: visible; -webkit-backface-visibility: visible; will-change: transform; animation: splash-turn 2.3s cubic-bezier(.42, 0, .25, 1) forwards; }
-    #splash .turn svg { display: block; width: 100%; height: auto; }
+    #splash .grow { width: 52vw; max-width: 220px; }
+    #splash .coin { position: relative; width: 100%; aspect-ratio: 1; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(circle at 50% 42%, #fffdf8 0%, #f6efe2 62%, #ecdfc8 100%);
+      box-shadow: inset 0 0 0 5px #b48a3c, inset 0 0 0 9px #f6efe2, inset 0 0 0 10px rgba(180,138,60,.5), 0 14px 30px rgba(43,38,34,.18);
+      transform: perspective(2000px) rotateY(0deg); backface-visibility: visible; -webkit-backface-visibility: visible; will-change: transform;
+      animation: splash-coin 8s linear forwards; }
+    #splash .coin svg { display: block; width: 72%; height: auto; margin-top: 6px; }
+    #splash .coin::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,.65) 50%, transparent 65%); transform: translateX(-120%); animation: splash-glint 4s linear 2 forwards; }
     html.splash-out #splash { animation: splash-fade .45s ease forwards; }
-    @keyframes splash-grow {
-      0% { transform: scale(.85); opacity: 0; }
-      10% { opacity: 1; }
-      75% { transform: scale(1); opacity: 1; }
-      100% { transform: scale(.15); opacity: 0; }
-    }
-    @keyframes splash-turn {
-      from { transform: perspective(800px) rotateY(0deg); }
-      to { transform: perspective(800px) rotateY(720deg); }
-    }
+    @keyframes splash-coin { from { transform: perspective(2000px) rotateY(0deg); } to { transform: perspective(2000px) rotateY(-720deg); } }
+    @keyframes splash-glint { 0%, 30% { transform: translateX(120%); } 80%, 100% { transform: translateX(-120%); } }
     @keyframes splash-fade { to { opacity: 0; } }
   </style>
   <script>
@@ -63,14 +62,14 @@
         try { sessionStorage.setItem('dw_splash', '1'); } catch (e) { /* private mode */ }
         var root = document.documentElement;
         root.classList.add('splash');
-        setTimeout(function () { root.classList.add('splash-out'); }, 2650);
-        setTimeout(function () { root.classList.remove('splash', 'splash-out'); }, 3100);
+        setTimeout(function () { root.classList.add('splash-out'); }, 8350);
+        setTimeout(function () { root.classList.remove('splash', 'splash-out'); }, 8800);
       } catch (e) { /* no splash, no harm */ }
     })();
   </script>
 </head>
 <body>
-  <div id="splash" aria-hidden="true"><div class="grow"><div class="turn"><svg viewBox="0 0 812 613" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="#111" fill-rule="evenodd" d="M810 62L804 58L784 52L764 49L752 45L746 39L745 26L725 10L713 4L691 0L672 0L651 3L640 9L631 11L607 34L601 48L593 57L593 62L590 69L591 71L565 111L551 126L541 131L535 138L511 155L488 160L463 171L416 179L292 176L262 180L237 188L221 196L181 223L160 245L128 294L97 326L79 339L64 347L13 367L0 380L16 387L23 387L32 391L43 390L44 392L57 390L57 392L62 392L70 389L72 391L84 386L86 388L113 375L121 368L122 369L138 353L139 355L156 335L166 314L171 308L172 309L171 385L173 386L171 393L171 412L165 431L158 444L148 458L132 474L129 480L124 535L117 569L118 596L124 604L130 606L161 606L175 600L175 595L168 583L163 578L152 574L152 554L156 529L166 507L180 484L223 443L224 445L220 453L204 476L201 484L201 491L217 555L223 570L223 579L229 586L244 588L273 587L283 582L282 574L273 564L267 561L253 561L250 558L241 530L241 510L253 476L259 467L281 443L306 407L317 382L323 357L331 342L352 345L371 354L369 352L371 351L400 367L422 371L466 388L494 394L530 396L533 414L535 456L535 502L533 513L535 522L531 546L533 552L540 556L541 572L547 594L546 600L550 608L564 612L591 612L604 609L607 605L606 598L602 591L595 584L581 579L574 554L573 535L577 521L580 479L583 464L587 496L587 536L589 540L595 542L599 548L604 567L611 580L612 588L616 591L633 594L664 592L668 589L669 590L672 587L672 582L665 572L659 567L653 565L640 565L638 563L631 547L625 524L627 512L627 470L629 445L640 378L648 364L665 341L675 318L677 302L681 295L685 279L683 251L686 236L686 225L693 205L695 184L707 151L713 142L722 135L758 135L770 130L776 125L785 124L792 120L800 110L803 103L804 88L807 81L807 75L811 67Z"/><path fill="#e8262b" d="M576 94L565 110L565 113L573 124L591 141L621 164L650 181L675 191L687 193L691 192L696 183L699 173L698 171L693 171L680 167L659 157L637 144L606 121L581 97Z"/></svg></div></div></div>
+  <div id="splash" aria-hidden="true"><div class="grow"><div class="coin"><svg viewBox="0 0 812 613" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="#111" fill-rule="evenodd" d="M810 62L804 58L784 52L764 49L752 45L746 39L745 26L725 10L713 4L691 0L672 0L651 3L640 9L631 11L607 34L601 48L593 57L593 62L590 69L591 71L565 111L551 126L541 131L535 138L511 155L488 160L463 171L416 179L292 176L262 180L237 188L221 196L181 223L160 245L128 294L97 326L79 339L64 347L13 367L0 380L16 387L23 387L32 391L43 390L44 392L57 390L57 392L62 392L70 389L72 391L84 386L86 388L113 375L121 368L122 369L138 353L139 355L156 335L166 314L171 308L172 309L171 385L173 386L171 393L171 412L165 431L158 444L148 458L132 474L129 480L124 535L117 569L118 596L124 604L130 606L161 606L175 600L175 595L168 583L163 578L152 574L152 554L156 529L166 507L180 484L223 443L224 445L220 453L204 476L201 484L201 491L217 555L223 570L223 579L229 586L244 588L273 587L283 582L282 574L273 564L267 561L253 561L250 558L241 530L241 510L253 476L259 467L281 443L306 407L317 382L323 357L331 342L352 345L371 354L369 352L371 351L400 367L422 371L466 388L494 394L530 396L533 414L535 456L535 502L533 513L535 522L531 546L533 552L540 556L541 572L547 594L546 600L550 608L564 612L591 612L604 609L607 605L606 598L602 591L595 584L581 579L574 554L573 535L577 521L580 479L583 464L587 496L587 536L589 540L595 542L599 548L604 567L611 580L612 588L616 591L633 594L664 592L668 589L669 590L672 587L672 582L665 572L659 567L653 565L640 565L638 563L631 547L625 524L627 512L627 470L629 445L640 378L648 364L665 341L675 318L677 302L681 295L685 279L683 251L686 236L686 225L693 205L695 184L707 151L713 142L722 135L758 135L770 130L776 125L785 124L792 120L800 110L803 103L804 88L807 81L807 75L811 67Z"/><path fill="#e8262b" d="M576 94L565 110L565 113L573 124L591 141L621 164L650 181L675 191L687 193L691 192L696 183L699 173L698 171L693 171L680 167L659 157L637 144L606 121L581 97Z"/></svg></div></div></div>
   <header class="top">
     <p class="eyebrow">From the novel <em>Jetson’s Journey</em></p>
     <h1>Every Dog Deserves a Dedication</h1>
