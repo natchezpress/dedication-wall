@@ -123,11 +123,12 @@ function drawFooter(ctx, top) {
 
 // k: type scale. The book page uses 1; the words panel on a Spot uses SCENE.type, so the dog gets more of
 // the square card (11/13: Brock found the dog's space narrow between the words and the plate).
-function measureTextBlock(ctx, d, w, k = 1) {
+// kName: the name's own scale (11/13: the name stays full size on a Spot; only the line and labels shrink).
+function measureTextBlock(ctx, d, w, k = 1, kName = k) {
   const modeLabel = d.mode === 'inMemory' ? 'IN MEMORY OF' : 'TO';
   const name = (d.name || 'Your dog').trim();
   const line = (d.line || '').trim();
-  const nameFit = fitLines(ctx, name, w, 2, Math.round(112 * k), Math.round(64 * k), 600);
+  const nameFit = fitLines(ctx, name, w, 2, Math.round(112 * kName), Math.round(64 * kName), 600);
   // A short line earns a bigger size; a long one shrinks until it fits in five rows.
   const lineFit = line ? fitLines(ctx, line, w, 5, Math.round(80 * k), Math.round(44 * k), 400, 'italic') : { size: Math.round(80 * k), lines: [] };
   const labelSize = Math.round(40 * k), gap1 = Math.round(24 * k), gap2 = Math.round(36 * k);
@@ -136,8 +137,8 @@ function measureTextBlock(ctx, d, w, k = 1) {
   return { modeLabel, nameFit, lineFit, labelSize, gap1, gap2, nameLH, lineLH, total };
 }
 
-function drawTextBlock(ctx, d, x, w, centerY, align = 'left', ink = INK, quiet = QUIET, k = 1) {
-  const { modeLabel, nameFit, lineFit, labelSize, gap1, gap2, nameLH, lineLH, total } = measureTextBlock(ctx, d, w, k);
+function drawTextBlock(ctx, d, x, w, centerY, align = 'left', ink = INK, quiet = QUIET, k = 1, kName = k) {
+  const { modeLabel, nameFit, lineFit, labelSize, gap1, gap2, nameLH, lineLH, total } = measureTextBlock(ctx, d, w, k, kName);
   let y = centerY - total / 2;
   const ax = align === 'center' ? x + w / 2 : x;
   ctx.textAlign = align;
@@ -204,7 +205,6 @@ function drawBook(ctx, d, photo) {
 const SCENE = {
   panel: { x: 164, y: 700, w: MASTER.w - 328, pad: 44, minH: 300 }, // top sits inside the 1:1 card (starts 648); height follows the words
   type: 0.86,                                            // the words a little smaller than on the book page (11/13)
-  tuck: 1 / 3,                                           // how much of the words box a dog may tuck behind (11/13)
   dogMaxW: 1240,                                         // a wide (standing) dog at scale 1: up to three-quarters of the card's width (was 900)
   footerTop: 2080,                                       // plate 2080–2280: inside the 1:1 card (ends 2296), so every cut carries it
   // The panel and the plate drag only within the square card (y 648–2296), so the words and the address
@@ -215,7 +215,7 @@ const SCENE = {
 // Everything the scene needs, in master pixels: where the panel, the plate and the dog are.
 export function sceneGeometry(ctx, d, sticker) {
   const lay = d.layout || {};
-  const panelH = Math.max(SCENE.panel.minH, measureTextBlock(ctx, d, SCENE.panel.w - 120, SCENE.type).total + SCENE.panel.pad * 2);
+  const panelH = Math.max(SCENE.panel.minH, measureTextBlock(ctx, d, SCENE.panel.w - 120, SCENE.type, 1).total + SCENE.panel.pad * 2);
   const panelY = Math.min(Math.max(SCENE.topMin, SCENE.panel.y + (lay.panelDy || 0)), SCENE.bottomMax - FOOTER.h - SCENE.gap - panelH);
   const footerMin = panelY + panelH + SCENE.gap;
   const footerY = Math.min(Math.max(footerMin, SCENE.footerTop + (lay.footerDy || 0)), SCENE.bottomMax - FOOTER.h);
@@ -245,17 +245,15 @@ export function sceneGeometry(ctx, d, sticker) {
     // went behind the panel). If he reaches up into it, the panel moves up out of his way, as far as the top
     // of the square card; past that, he stops at the panel and keeps his size (a very big dog runs down
     // behind the plate instead). A dog dragged wholly above the panel, or off to one side of it, is left alone.
-    // 11/13 (Brock: “no wiggle room at the top”, an enlarged dog was stuck down by the plate): once the
-    // person drags him up themselves (view.tuck, set by the maker), he may tuck behind the lower third of the
-    // words box, as he can tuck behind the plate. The box is translucent and its words are drawn over him,
-    // so they stay readable. Left alone or only enlarged, the automatic fix stays strict: words never on him.
+    // 11/13 (Brock, Ridley: “his tail should be able to go under the top text box”): once the person drags
+    // the dog up themselves (view.tuck, set by the maker), he goes wherever they put him, under the words box
+    // too, as he can go under the plate; the box is translucent and its words are drawn over him. Left alone
+    // or only enlarged, the automatic fix stays strict: the words never sit on him.
     const across = dog.x < SCENE.panel.x + SCENE.panel.w && dog.x + dog.w > SCENE.panel.x;
-    const tuck = sticker.view?.tuck ? panelH * SCENE.tuck : 0;
-    const reach = dog.y + tuck;   // how high the words must stay clear of
-    if (across && bottom > panelY && reach < panelY + panelH + SCENE.dogGap) {
-      topY = Math.max(SCENE.topMin, reach - SCENE.dogGap - panelH);
+    if (!sticker.view?.tuck && across && bottom > panelY && dog.y < panelY + panelH + SCENE.dogGap) {
+      topY = Math.max(SCENE.topMin, dog.y - SCENE.dogGap - panelH);
       const clear = topY + panelH + SCENE.dogGap;
-      if (reach < clear) dog = { ...dog, y: clear - tuck };
+      if (dog.y < clear) dog = { ...dog, y: clear };
     }
     dogDy = dog.y + dog.h - floor;
   }
@@ -290,7 +288,7 @@ function drawScene(ctx, d, sticker) {
   ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 40; ctx.shadowOffsetY = 10;
   roundRect(ctx, panel.x, panel.y, panel.w, panel.h, 18); ctx.fill();
   ctx.restore();
-  drawTextBlock(ctx, d, panel.x + 60, panel.w - 120, panel.y + panel.h / 2, 'center', INK, QUIET, SCENE.type);
+  drawTextBlock(ctx, d, panel.x + 60, panel.w - 120, panel.y + panel.h / 2, 'center', INK, QUIET, SCENE.type, 1);
   drawFooter(ctx, g.footer.y);
 }
 
