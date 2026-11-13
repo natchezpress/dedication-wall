@@ -202,7 +202,7 @@ export function dogPage({ e, site, hearted = false, owner = null, dotd = false }
 </div>`;
   }
   const body = `
-<div class="dog">
+<div class="dog"${hearted ? ' data-hearted="1"' : ''}>
   <img class="story" src="${withV(`/p/${h(e.id)}/story.jpg${q}`, e.story_key, q ? '&' : '?')}" alt="${h(e.dog_name)}’s dedication page" />
   <div class="words">
     ${dotd ? '<div class="dotd-ribbon">Today’s Dog of the Day</div>' : ''}
