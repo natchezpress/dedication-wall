@@ -51,7 +51,9 @@ footer a{color:var(--quiet)}
 .tell input{width:100%;font:inherit;font-size:17px;padding:10px 12px;border:1px solid #e3d9c7;border-radius:10px;background:#fff;color:var(--ink)}
 `;
 
-function layout({ title, description, image, url, body, nav = '', noindex = false }) {
+// analytics: false leaves out Google Analytics (the admin pages, so Brock's own visits don't count as wall
+// traffic; planner session, 11/13). Every public page keeps it.
+function layout({ title, description, image, url, body, nav = '', noindex = false, analytics = true }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -59,9 +61,9 @@ function layout({ title, description, image, url, body, nav = '', noindex = fals
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${h(title)}</title>
 <meta name="description" content="${h(description)}" />
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-ZQLVEN820R"></script>
+${analytics ? `<script async src="https://www.googletagmanager.com/gtag/js?id=G-ZQLVEN820R"></script>
 <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-ZQLVEN820R');</script>
-<meta property="og:title" content="${h(title)}" />
+` : ''}<meta property="og:title" content="${h(title)}" />
 <meta property="og:description" content="${h(description)}" />
 <meta property="og:type" content="website" />
 ${url ? `<meta property="og:url" content="${h(url)}" />` : ''}
@@ -224,8 +226,8 @@ export function dogPage({ e, site, hearted = false, owner = null, dotd = false }
   return layout({ title, description, image, url: `${site}/d/${e.id}`, body: bodyWithEvents, nav: nav(e.mode === 'in_memory' ? '/memory' : '/wall'), noindex: !!owner?.pending });
 }
 
-export function simplePage({ title, description = title, bodyHtml, site, path, noindex = false }) {
-  return layout({ title, description, url: site && path ? `${site}${path}` : '', body: `<div class="prose">${bodyHtml}</div>`, nav: nav(''), noindex });
+export function simplePage({ title, description = title, bodyHtml, site, path, noindex = false, analytics = true }) {
+  return layout({ title, description, url: site && path ? `${site}${path}` : '', body: `<div class="prose">${bodyHtml}</div>`, nav: nav(''), noindex, analytics });
 }
 
 export function notFoundPage() {
