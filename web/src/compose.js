@@ -245,11 +245,12 @@ export function sceneGeometry(ctx, d, sticker) {
     // went behind the panel). If he reaches up into it, the panel moves up out of his way, as far as the top
     // of the square card; past that, he stops at the panel and keeps his size (a very big dog runs down
     // behind the plate instead). A dog dragged wholly above the panel, or off to one side of it, is left alone.
-    // 11/13 (Brock: “no wiggle room at the top”, an enlarged dog was stuck down by the plate): he may tuck
-    // behind the lower third of the words box, as he can tuck behind the plate. The box is translucent and
-    // its words are drawn over him, so they stay readable.
+    // 11/13 (Brock: “no wiggle room at the top”, an enlarged dog was stuck down by the plate): once the
+    // person drags him up themselves (view.tuck, set by the maker), he may tuck behind the lower third of the
+    // words box, as he can tuck behind the plate. The box is translucent and its words are drawn over him,
+    // so they stay readable. Left alone or only enlarged, the automatic fix stays strict: words never on him.
     const across = dog.x < SCENE.panel.x + SCENE.panel.w && dog.x + dog.w > SCENE.panel.x;
-    const tuck = panelH * SCENE.tuck;
+    const tuck = sticker.view?.tuck ? panelH * SCENE.tuck : 0;
     const reach = dog.y + tuck;   // how high the words must stay clear of
     if (across && bottom > panelY && reach < panelY + panelH + SCENE.dogGap) {
       topY = Math.max(SCENE.topMin, reach - SCENE.dogGap - panelH);
