@@ -100,14 +100,20 @@ function drawBackground(ctx, bg, img) {
 // leaves, sky or a sidewalk. Nothing else is drawn in its band.
 const FOOTER = { h: 200, pad: 80, line: 64, site: 44 };
 
-function drawFooter(ctx, top) {
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'alphabetic';
+// The plate as drawn: centered, as wide as its two lines need.
+function plateBox(ctx, top) {
   ctx.font = `italic 600 ${FOOTER.line}px ${SERIF}`;
   const lineW = ctx.measureText(FOOTER_LINE).width;
   ctx.font = `500 ${FOOTER.site}px ${SERIF}`;
   const siteW = ctx.measureText(SITE).width;
   const w = Math.min(MASTER.w - 160, Math.max(lineW, siteW) + FOOTER.pad * 2);
+  return { x: (MASTER.w - w) / 2, y: top, w, h: FOOTER.h };
+}
+
+function drawFooter(ctx, top) {
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  const { w } = plateBox(ctx, top);
   ctx.save();
   ctx.fillStyle = 'rgba(247,241,230,0.86)';
   ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 40; ctx.shadowOffsetY = 10;
@@ -209,59 +215,111 @@ const SCENE = {
   footerTop: 2080,                                       // plate 2080–2280: inside the 1:1 card (ends 2296), so every cut carries it
   // The panel and the plate drag only within the square card (y 648–2296), so the words and the address
   // always show on the wall and in every link preview (11/11: Lola's card lost “To Lola” and the plate).
-  topMin: CUTS.card.y + 24, bottomMax: CUTS.card.y + CUTS.card.h - 16, gap: 480, dogGap: 20, roomMin: 240, // gap: the band kept for the dog between panel and plate
+  topMin: CUTS.card.y + 24, bottomMax: CUTS.card.y + CUTS.card.h - 16, dogGap: 20, roomMin: 240,
+  hiddenMax: 0.3, // a posted card is tidied if more than this share of the dog is hidden (tidyScene, 11/14):
+                  // a tail tucked under the words is well under it; his whole head plus some body is over it
 };
 
 // Everything the scene needs, in master pixels: where the panel, the plate and the dog are.
+// 11/14 (Brock): “as long as things don't go out of the viewing area the user can move it.” The words panel,
+// the plate and the dog each move on their own, anywhere on the square card (the part the wall shows), and
+// nothing pushes anything else. The panel and the plate are drawn over the dog, so the words always stay
+// readable. If the result looks wrong (the dog mostly hidden, or the panel and the plate on top of each
+// other or out of order), tidyScene() below puts it right when the card is posted, so no post looks bad.
 export function sceneGeometry(ctx, d, sticker) {
   const lay = d.layout || {};
+  const hold = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
   const panelH = Math.max(SCENE.panel.minH, measureTextBlock(ctx, d, SCENE.panel.w - 120, SCENE.type, 1).total + SCENE.panel.pad * 2);
-  const panelY = Math.min(Math.max(SCENE.topMin, SCENE.panel.y + (lay.panelDy || 0)), SCENE.bottomMax - FOOTER.h - SCENE.gap - panelH);
-  const footerMin = panelY + panelH + SCENE.gap;
-  const footerY = Math.min(Math.max(footerMin, SCENE.footerTop + (lay.footerDy || 0)), SCENE.bottomMax - FOOTER.h);
+  const panelY = hold(SCENE.panel.y + (lay.panelDy || 0), SCENE.topMin, SCENE.bottomMax - panelH);
+  const footerY = hold(SCENE.footerTop + (lay.footerDy || 0), SCENE.topMin, SCENE.bottomMax - FOOTER.h);
   const footer = { x: 0, y: footerY, w: MASTER.w, h: FOOTER.h };
-  let dog = null, dogDy = 0;
-  let topY = panelY;
+  const floor = SCENE.footerTop - SCENE.dogGap; // where his feet start: just above the plate's own place
+  let dog = null;
   if (sticker?.img) {
     const img = sticker.img;
     const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
-    const floor = footerY - SCENE.dogGap;
-    // At scale 1 the dog fits the room between the panel and the plate, whatever its shape.
-    const room = Math.max(SCENE.roomMin, floor - (panelY + panelH) - 40);
+    // At scale 1 the dog fits the room between the panel's and the plate's own places, whatever his shape;
+    // moving the panel or the plate never resizes or drags him.
+    const room = Math.max(SCENE.roomMin, floor - (SCENE.panel.y + panelH) - 40);
     const fitW = Math.min(SCENE.dogMaxW, room * iw / ih);
     const w = fitW * (sticker.view?.scale || 1);
     const h = w * ih / iw;
-    // The dog starts with his feet just above the plate and can be moved from there, in both directions;
-    // the panel and the plate are drawn over him, so the words always stay readable. He can't be slid off
-    // the card (11/13): his middle stays on the square card, at least a quarter of his size in from its edges
-    // (a small dog stays mostly in view; a big one can't wander off).
-    const card = CUTS.card, hold = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    // He can't be slid off the card (11/13): his middle stays on the square card, at least a quarter of his
+    // size in from its edges (a small dog stays mostly in view; a big one can't wander off).
+    const card = CUTS.card;
     const inX = Math.min(w, card.w) / 4, inY = Math.min(h, card.h) / 4;
     const cx = hold(MASTER.w / 2 + (sticker.view?.dx || 0), inX, MASTER.w - inX);
     const midY = hold(floor + (sticker.view?.dy || 0) - h / 2, card.y + inY, card.y + card.h - inY);
-    const bottom = midY + h / 2;
-    dog = { x: cx - w / 2, y: bottom - h, w, h, img };
-    // …but the words never cover him (Tanner and Lola, 11/11: pinched bigger or dragged up, the dog's head
-    // went behind the panel). If he reaches up into it, the panel moves up out of his way, as far as the top
-    // of the square card; past that, he stops at the panel and keeps his size (a very big dog runs down
-    // behind the plate instead). A dog dragged wholly above the panel, or off to one side of it, is left alone.
-    // 11/13 (Brock, Ridley: “his tail should be able to go under the top text box”): once the person drags
-    // the dog up themselves (view.tuck, set by the maker), he goes wherever they put him, under the words box
-    // too, as he can go under the plate; the box is translucent and its words are drawn over him. Left alone
-    // or only enlarged, the automatic fix stays strict: the words never sit on him.
-    const across = dog.x < SCENE.panel.x + SCENE.panel.w && dog.x + dog.w > SCENE.panel.x;
-    if (!sticker.view?.tuck && across && bottom > panelY && dog.y < panelY + panelH + SCENE.dogGap) {
-      topY = Math.max(SCENE.topMin, dog.y - SCENE.dogGap - panelH);
-      const clear = topY + panelH + SCENE.dogGap;
-      if (dog.y < clear) dog = { ...dog, y: clear };
-    }
-    dogDy = dog.y + dog.h - floor;
+    dog = { x: cx - w / 2, y: midY - h / 2, w, h, img };
   }
-  const panel = { x: SCENE.panel.x, y: topY, w: SCENE.panel.w, h: panelH };
-  // panelWant: where the reader's drags put the words before the dog moved them; panelDy and footerDy: the
-  // offsets that match what is drawn, so the maker can keep its saved layout honest (11/13, below).
+  const panel = { x: SCENE.panel.x, y: panelY, w: SCENE.panel.w, h: panelH };
+  // dogDx, dogDy, panelDy and footerDy: the offsets that match what is drawn, so the maker keeps its saved
+  // layout honest (a drag past an edge doesn't build up a hidden offset; 11/13).
   const dogDx = dog ? dog.x + dog.w / 2 - MASTER.w / 2 : 0;
-  return { panel, footer, dog, dogDx, dogDy, panelWant: panelY, panelDy: topY - SCENE.panel.y, footerDy: footerY - SCENE.footerTop };
+  const dogDy = dog ? dog.y + dog.h - floor : 0;
+  return { panel, footer, plate: plateBox(ctx, footerY), dog, dogDx, dogDy, panelDy: panelY - SCENE.panel.y, footerDy: footerY - SCENE.footerTop };
+}
+
+// How much of the dog can't be seen: measured on his own pixels (a coarse grid of the cut-out), not his box,
+// so a tail tucked under the words counts for little and his head counts for a lot. Hidden means behind the
+// words panel or the plate, or off the square card.
+const alphaGrids = new WeakMap();
+function dogMask(img) {
+  if (alphaGrids.has(img)) return alphaGrids.get(img);
+  let grid = null;
+  try {
+    const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    const gw = 48, gh = Math.max(8, Math.min(96, Math.round(48 * ih / iw)));
+    const c = document.createElement('canvas'); c.width = gw; c.height = gh;
+    const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0, gw, gh);
+    const a = x.getImageData(0, 0, gw, gh).data;
+    grid = { gw, gh, on: [] };
+    for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) if (a[(j * gw + i) * 4 + 3] > 128) grid.on.push([(i + 0.5) / gw, (j + 0.5) / gh]);
+  } catch { grid = null; }
+  alphaGrids.set(img, grid);
+  return grid;
+}
+function hiddenShare(g) {
+  const { dog, panel, plate } = g, card = { x: 0, y: CUTS.card.y, w: CUTS.card.w, h: CUTS.card.h };
+  const inside = (r, x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  const covered = (x, y) => inside(panel, x, y) || inside(plate, x, y) || !inside(card, x, y);
+  const mask = dogMask(dog.img);
+  const pts = mask?.on?.length ? mask.on : Array.from({ length: 400 }, (_, k) => [((k % 20) + 0.5) / 20, (Math.floor(k / 20) + 0.5) / 20]);
+  let hid = 0;
+  for (const [u, v] of pts) if (covered(dog.x + u * dog.w, dog.y + v * dog.h)) hid++;
+  return hid / pts.length;
+}
+
+export const dogHiddenShare = (ctx, d, sticker) => { const g = sceneGeometry(ctx, d, sticker); return g.dog ? hiddenShare(g) : 0; };
+
+// What a posted card must not be (11/14): 'order' (the words below the plate), 'overlap' (the words and the
+// plate on top of each other) or 'dog' (more than SCENE.hiddenMax of the dog hidden).
+export function sceneProblems(ctx, d, sticker) {
+  const g = sceneGeometry(ctx, d, sticker);
+  const out = [];
+  if (g.panel.y >= g.plate.y) out.push('order');
+  else if (g.panel.y + g.panel.h > g.plate.y) out.push('overlap');
+  if (g.dog && hiddenShare(g) > SCENE.hiddenMax) out.push('dog');
+  return out;
+}
+
+// The cleanup before posting: the gentlest change that puts the card right, or null if nothing is wrong.
+// 1. The plate back to its place at the foot; if the words still sit on it or below it, the words back too.
+// 2. The dog back to his starting spot; then, if he's still hidden, the words and the plate to theirs; then,
+//    if he's still too big to show, a little smaller each step until he shows (never below his starting size).
+export function tidyScene(ctx, d, sticker) {
+  const problems = sceneProblems(ctx, d, sticker);
+  if (!problems.length) return null;
+  const layout = { panelDy: 0, footerDy: 0, ...(d.layout || {}) };
+  const view = { scale: 1, dx: 0, dy: 0, ...(sticker?.view || {}) };
+  const left = () => sceneProblems(ctx, { ...d, layout }, sticker && { ...sticker, view });
+  let now = problems;
+  if (now.includes('order') || now.includes('overlap')) { layout.footerDy = 0; now = left(); }
+  if (now.includes('order') || now.includes('overlap')) { layout.panelDy = 0; now = left(); }
+  if (now.includes('dog')) { view.dx = 0; view.dy = 0; now = left(); }
+  if (now.includes('dog')) { layout.panelDy = 0; layout.footerDy = 0; now = left(); }
+  for (let i = 0; i < 20 && now.includes('dog') && view.scale > 1; i++) { view.scale = Math.max(1, view.scale * 0.9); now = left(); }
+  return { problems, layout, view, left: now };
 }
 
 // Which part of the scene is under a master-pixel point: 'panel', 'footer', 'dog' or null.
@@ -269,7 +327,7 @@ export function sceneHit(canvas, d, sticker, x, y) {
   const g = sceneGeometry(canvas.getContext('2d'), d, sticker);
   const inside = (r) => r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
   if (inside(g.panel)) return 'panel';
-  if (inside(g.footer) && x >= (MASTER.w - 1100) / 2 && x <= (MASTER.w + 1100) / 2) return 'footer';
+  if (inside(g.plate)) return 'footer';
   if (inside(g.dog)) return 'dog';
   return null;
 }

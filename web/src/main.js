@@ -1,4 +1,4 @@
-import { MASTER, CUTS, render, cut, ensureFonts, sceneHit, sceneGeometry, bookPhotoView } from './compose.js';
+import { MASTER, CUTS, render, cut, ensureFonts, sceneHit, sceneGeometry, tidyScene, bookPhotoView } from './compose.js';
 import { inWindow } from './windows.js';
 import { suggest } from './lines.js';
 
@@ -382,6 +382,20 @@ $('#zoom').addEventListener('input', (ev) => {
 // The saved offsets always match what is drawn. 11/13: with a big dog the words were held at the top, but
 // each drag on them still added to a hidden offset, which then pinned the footer to the bottom too, and
 // the stuck numbers were saved with the draft, so neither box would move again.
+// The cleanup before a card is posted (11/14, Brock: “if … you can't see the dog or the text boxes are placed
+// funny, the app will perform cleanup ‘fix’ so no post looks bad”). The preview shows the tidied card too,
+// and the draft keeps it. Brock's Fix pictures tool doesn't tidy: there he places things exactly.
+function tidyBeforePosting() {
+  if (!isScene()) return null;
+  const t = tidyScene(master.getContext('2d'), words(), photoForRender());
+  if (!t) return null;
+  state.layout = { ...state.layout, panelDy: t.layout.panelDy, footerDy: t.layout.footerDy };
+  Object.assign(state.photo.view, { dx: t.view.dx, dy: t.view.dy, scale: t.view.scale });
+  keepLayoutHonest(); saveDraft(); draw();
+  $('#preview-hint').textContent = `We tidied the card so ${state.name.trim() || 'your dog'} and the words both show.`;
+  track('card_tidied', { problems: t.problems.join(','), left: t.left.join(',') });
+  return t;
+}
 function keepLayoutHonest() {
   if (!isScene()) return;
   const g = sceneGeometry(master.getContext('2d'), words(), photoForRender());
@@ -419,23 +433,14 @@ preview.addEventListener('pointermove', (ev) => {
   const k = MASTER.w / preview.clientWidth;
   if (pointers.size === 1) {
     const dx = (ev.clientX - prev.x) * k, dy = (ev.clientY - prev.y) * k;
-    if (dragTarget === 'panel') {
-      state.layout.panelDy += dy;
-      // The words move even past a big dog: dragged down into him, they push him down too.
-      const g = sceneGeometry(master.getContext('2d'), words(), photoForRender());
-      const blocked = g.panelWant - g.panel.y;
-      if (dy > 0 && blocked > 0) state.photo.view.dy += blocked;
-      keepLayoutHonest();
-      // A dog too big to go any lower (he has to stay on the card) holds the words where they are: say why.
-      if (dy > 0 && blocked > 0 && Math.abs(sceneGeometry(master.getContext('2d'), words(), photoForRender()).panel.y - g.panel.y) < 1) {
-        $('#preview-hint').textContent = 'Your dog is too big for the words to go lower. Make him a little smaller (pinch, or use the slider), then drag the words.';
-      }
-    } else if (dragTarget === 'footer') { state.layout.footerDy += dy; keepLayoutHonest(); }
+    // 11/14 (Brock): each thing moves on its own, anywhere on the square card; nothing pushes anything else.
+    // If it ends up looking wrong, the card is tidied when it's posted (tidyScene in compose.js).
+    if (dragTarget === 'panel') { state.layout.panelDy += dy; keepLayoutHonest(); }
+    else if (dragTarget === 'footer') { state.layout.footerDy += dy; keepLayoutHonest(); }
     else {
       state.photo.view.dx += dx; state.photo.view.dy += dy;
-      if (dy < 0) state.photo.view.tuck = true; // dragged up on purpose: he may go under the words too (compose.js)
-      // The view keeps the dog's real place (stopped by the words, or held on the card), so dragging back
-      // moves him at once; on the book page the photo stays in its frame.
+      // The view keeps the dog's real place (held on the card), so dragging back moves him at once; on the
+      // book page the photo stays in its frame.
       if (isScene()) { const g = sceneGeometry(master.getContext('2d'), words(), photoForRender()); state.photo.view.dx = g.dogDx; state.photo.view.dy = g.dogDy; }
       else Object.assign(state.photo.view, bookPhotoView(state.photo));
     }
@@ -454,7 +459,6 @@ const endPointer = (ev) => {
   pointers.delete(ev.pointerId); if (pointers.size < 2) pinchStart = null;
   // After a pinch the dog's size changed, so his allowed place did too: keep the saved view honest.
   if (!pointers.size && state.photo) { if (isScene()) keepLayoutHonest(); else Object.assign(state.photo.view, bookPhotoView(state.photo)); }
-  if (!pointers.size) setTimeout(updateHint, 2500); // the "too big" note stays a moment, then the usual hint
 };
 preview.addEventListener('pointerup', endPointer);
 preview.addEventListener('pointercancel', endPointer);
@@ -851,6 +855,8 @@ $('#post-form').addEventListener('submit', async (ev) => {
   if ($('#post-submit').disabled) { status.scrollIntoView({ block: 'nearest' }); return; }
   const btn = $('#post-submit'); btn.disabled = true; btn.textContent = 'Making the page…'; status.textContent = 'Drawing the three sizes; a few seconds on a phone.';
   try {
+    const tidied = tidyBeforePosting();
+    if (tidied) status.textContent = `We tidied the card so ${state.name.trim() || 'your dog'} and the words both show. Drawing the three sizes…`;
     const [story, feed, card] = await Promise.all([makeFile('story'), makeFile('feed'), makeFile('card')]);
     const fd = new FormData();
     fd.set('dog_name', state.name.trim()); fd.set('line', state.line.trim());
@@ -879,7 +885,10 @@ $('#post-form').addEventListener('submit', async (ev) => {
     status.textContent = `Couldn’t post (${e.message}). Nothing was saved; try again.`;
     status.scrollIntoView({ block: 'nearest' });
     report(`post: ${e.message}`, 'post');
-  } finally { btn.textContent = 'Post it'; readyToPost(); }
+  } finally {
+    // readyToPost() clears the line under the button when all is ready; keep an error or the tidy note there.
+    btn.textContent = 'Post it'; const said = status.textContent; readyToPost(); if (said && !status.textContent) status.textContent = said;
+  }
 });
 $('#done-again').addEventListener('click', () => { location.href = '/'; });
 
