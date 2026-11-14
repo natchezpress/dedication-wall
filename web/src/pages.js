@@ -144,7 +144,9 @@ const cardHtml = (e) => `<a class="card" href="/d/${h(e.id)}"><img src="${withV(
 const DAILY = { name: 'Dog of the Day', current: 'today’s Dog of the Day', Current: 'Today’s Dog of the Day', span: 'day' };
 
 export function wallPage({ entries, dotd, memory = false, site, feature = DAILY }) {
-  const title = memory ? 'In Memory · Every Dog Deserves a Dedication' : 'The Dedication Wall';
+  // 11/14 (OPS-63 audit, Brock's pick): the site calls it the Dedication Wall, so the tabs do too. Dog pages
+  // keep “To Jetson · Every Dog Deserves a Dedication”: the hook line is what sells a shared link.
+  const title = memory ? 'In Memory · The Dedication Wall' : 'The Dedication Wall';
   const description = memory
     ? 'A quiet wall for the dogs we have lost, each with the dedication they deserved.'
     : 'Dogs and the dedications their people wrote for them, from readers of Jetson’s Journey.';
