@@ -394,7 +394,10 @@ let pinchStart = null;
 let dragTarget = 'photo';
 preview.addEventListener('pointerdown', (ev) => {
   if (!state.photo) return;
-  preview.setPointerCapture(ev.pointerId);
+  // Capture keeps the drag going if the finger slides off the card. A pointer that is already gone (a touch
+  // the phone cancelled, or a made-up test touch) can't be captured, and the browser throws; the drag goes
+  // on without it rather than stopping dead (11/14: the two Words-step failures of 11/13 were this).
+  try { preview.setPointerCapture(ev.pointerId); } catch (e) { /* drag without capture */ }
   pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
   if (pointers.size === 1) {
     dragTarget = 'photo';
