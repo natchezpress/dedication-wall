@@ -58,6 +58,7 @@ export default {
       if (p.startsWith('/api/admin')) return admin(env, request, url);
       // Local and preview only: run the evening-note tick at a chosen time and see what it sent.
       if (p === '/api/dev/morning' && devMode(env)) return json({ ok: true, out: await morning(env, Number(url.searchParams.get('ts')) || Date.now()) });
+      if (p === '/api/dev/week' && devMode(env)) return json({ ok: true, ...(await weekSummary(env, Math.floor((Number(url.searchParams.get('ts')) || Date.now()) / 1000))) });
       if (p === '/api/dev/hearts' && devMode(env)) return json({ ok: true, sent: await eveningNotes(env, Number(url.searchParams.get('ts')) || Date.now()) });
       if (p.startsWith('/api/')) return bad('no such route', 404);
 
@@ -557,7 +558,9 @@ async function heartSwitch(env, request) {
     const form = await request.formData().catch(() => null);
     const want = form?.get('List-Unsubscribe') === 'One-Click' ? 'off' : form?.get('set');
     if (want !== 'off' && want !== 'on') return bad('set needed');
-    await env.DB.prepare('UPDATE owners SET heart_mail_off = ? WHERE email = ?').bind(want === 'off' ? 1 : 0, o.email).run();
+    // Keep when they turned it off (11/16), for the admin page and the Monday summary; only the first tap counts.
+    await env.DB.prepare('UPDATE owners SET heart_mail_off = ?, heart_mail_off_at = CASE WHEN ? = 1 THEN COALESCE(heart_mail_off_at, ?) ELSE NULL END WHERE email = ?')
+      .bind(want === 'off' ? 1 : 0, want === 'off' ? 1 : 0, now(), o.email).run();
     return html(simplePage({ title: want === 'off' ? 'Emails are off' : 'Emails are on', noindex: true,
       bodyHtml: want === 'off'
         ? `<p>You won’t get our evening notes anymore. Your dogs stay on the wall, and their hearts keep counting.</p>${onForm(' quiet')}<p><a href="/wall">See the wall</a></p>`
@@ -1371,6 +1374,10 @@ async function adminPage(env, request, url) {
   const { results: counts } = await env.DB.prepare('SELECT status, COUNT(*) AS n FROM entries GROUP BY status').all();
   const { results: failRows } = await env.DB.prepare('SELECT at, kind, detail, ua, visitor, email FROM failures WHERE at > ? ORDER BY at DESC LIMIT 40').bind(now() - 86400).all();
   const fails = await describeFailures(env, failRows);
+  // Who turned the wall's emails off, newest first (11/16).
+  const { results: offRows } = await env.DB.prepare(`SELECT o.email, o.heart_mail_off_at, (SELECT GROUP_CONCAT(dog_name, ', ') FROM entries e WHERE e.owner_email = o.email AND e.status = 'live') AS dogs
+    FROM owners o WHERE o.heart_mail_off = 1 ORDER BY COALESCE(o.heart_mail_off_at, 0) DESC LIMIT 100`).all();
+  const invOff = (await env.DB.prepare('SELECT COUNT(*) AS n FROM suppressed').first())?.n || 0;
   // Asked for a sign-in in the last week and never posted (11/11: a friend asked whether she “did it right”
   // and nothing showed where she stopped). Signed in = the newest link or code was used.
   const { results: stalled } = await env.DB.prepare(`SELECT o.email, o.link_sent_at, o.links_n, o.magic_token IS NULL AS signed_in FROM owners o
@@ -1387,13 +1394,16 @@ ${stalled.length ? `<ul class="small">${stalled.map((o) => `<li><a href="mailto:
 <form onsubmit="return saveSettings(event)">
 <p><label>Featured dog <select name="dotd_cadence"><option value="weekly"${f.weekly ? ' selected' : ''}>Weekly: Dog of the Week, new each Monday</option><option value="daily"${f.weekly ? '' : ' selected'}>Daily: Dog of the Day</option></select></label></p>
 <p><label>${f.name} (entry id, blank = automatic) <input name="dog_of_the_day" value="${h(s.dogOfTheDay)}" size="10"/></label></p>
-<p class="small">${f.weekly ? 'This week' : 'Today'}: ${dotdToday ? `<a href="/d/${h(dotdToday.id)}">${h(dotdToday.dog_name)}</a>` : 'nobody yet'} · Next in line${f.weekly ? ' (next Monday)' : ''}: ${dotdNext ? h(dotdNext.dog_name) : 'nobody'} · Phones with morning notes: ${pushPhones}</p>
+<p class="small">${f.weekly ? 'This week' : 'Today'}: ${dotdToday ? `<a href="/d/${h(dotdToday.id)}">${h(dotdToday.dog_name)}</a>` : 'nobody yet'} · Next in line${f.weekly ? ' (next Monday)' : ''}: ${dotdNext ? h(dotdNext.dog_name) : 'nobody'} · Phones getting the ${h(f.name)} notification: ${pushPhones}</p>
 <p><label>Terms version recorded on new posts <input name="terms_version" value="${h(s.termsVersion)}" size="28"/></label></p>
 <p><label><input type="checkbox" name="notify_live"${s.notifyLive ? ' checked' : ''}/> Email me each time a dog goes live (the “needs your look” note always comes)</label></p>
 <p><button class="btn" type="submit">Save</button> <span class="small" id="saved"></span></p>
 </form>
 <h2>Background requests (${reqs.length} open)</h2>
 ${reqs.length ? `<ul class="small">${reqs.map((r) => `<li>${h(centralDateTime(r.created_at))} · <em>${h(r.text)}</em>${r.email ? ` · <a href="mailto:${h(r.email)}?subject=Your%20background%20request">${h(r.email)}</a>` : ''} · <button class="btn quiet" style="padding:4px 10px;font-size:13px" onclick="closeRequest('${h(r.id)}')">Done</button></li>`).join('')}</ul>` : '<p class="small">None open.</p>'}
+<h2>Turned the emails off (${offRows.length})</h2>
+${offRows.length ? `<ul class="small">${offRows.map((o) => `<li>${h(o.email)}${o.dogs ? ` · ${h(o.dogs)}` : ''} · ${o.heart_mail_off_at ? h(centralDateTime(o.heart_mail_off_at)) : 'before Nov 16'}</li>`).join('')}</ul>` : '<p class="small">Nobody has turned the wall’s emails off.</p>'}
+<p class="small">They tapped “Turn these emails off” (or their mail app’s Unsubscribe) in an evening note or the ${h(f.name)} email; their dogs stay on the wall. Invited friends who said “don’t email me again”: ${invOff} (their addresses aren’t kept, only a scrambled check).</p>
 <h2>Last 24 hours (${failRows.length} failure${failRows.length === 1 ? '' : 's'})</h2>
 ${fails.length ? `<ul>${fails.map((f) => `<li style="margin-bottom:12px"><strong>${h(f.x.what)}</strong>${f.n > 1 ? ` (${f.n} times)` : ''}
 <div class="small">${h(centralDateTime(f.at))}${f.ua ? ` · ${h(device(f.ua))}` : ''}${f.email ? ` · ${h(f.email)}` : ''}${f.after ? ` · <strong>${f.after}</strong>` : ''}</div>
@@ -1435,20 +1445,53 @@ async function daily(env) {
   } catch (err) { console.error('failure digest', err); }
   await canary(env);
   try { await env.DB.prepare('DELETE FROM failures WHERE at < ?').bind(t - 30 * 86400).run(); } catch (err) { console.error('failure sweep', err); }
-  const since = t - 7 * 86400;
-  const newLive = (await q('SELECT COUNT(*) AS n FROM entries WHERE status = \'live\' AND is_test = 0 AND live_at > ?', since)).n;
-  const pending = (await q('SELECT COUNT(*) AS n FROM entries WHERE status = \'pending\'')).n;
-  const hearts = (await q('SELECT COALESCE(SUM(hearts),0) AS n FROM entries WHERE is_test = 0')).n;
-  const requests = (await q('SELECT COUNT(*) AS n FROM requests WHERE status = \'new\'')).n;
-  const weekFails = (await q('SELECT COUNT(*) AS n FROM failures WHERE at > ?', since)).n;
-  const heartNotes = (await q('SELECT COUNT(*) AS n FROM notices WHERE kind = \'hearts\' AND status = \'sent\' AND sent_at > ?', since)).n;
-  const phones = (await q('SELECT COUNT(*) AS n FROM push_subs')).n;
   const isMonday = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', weekday: 'short' }).format(new Date()) === 'Mon';
-  if (isMonday && env.CONTACT_EMAIL) {
-    await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'digest', subject: 'Dedication Wall, this week',
-      text: `New dogs on the wall: ${newLive}\nWaiting in the queue: ${pending}\nHearts so far: ${hearts}\nEvening notes sent: ${heartNotes}\nPhones with morning notes: ${phones}\nBackground requests open: ${requests}\nFailures this week: ${weekFails}\n\nAdmin: ${site(env)}/admin`,
-      html: `<p>New dogs on the wall: <strong>${newLive}</strong><br>Waiting in the queue: <strong>${pending}</strong><br>Hearts so far: ${hearts}<br>Evening notes sent: ${heartNotes}<br>Phones with morning notes: ${phones}<br>Background requests open: ${requests}<br>Failures this week: ${weekFails}</p><p><a href="${site(env)}/admin">Admin</a></p>` });
-  }
+  if (isMonday && env.CONTACT_EMAIL) await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'digest', ...(await weekSummary(env, t)) });
+}
+
+// The Monday summary (11/16, Brock: “can we make that more explicit”): each number with one line saying what
+// it counts. The week is the seven days up to the Monday-morning send.
+async function weekSummary(env, t) {
+  const q = async (sql, ...b) => (await env.DB.prepare(sql).bind(...b).first());
+  const since = t - 7 * 86400;
+  const f = feature((await settings(env)).dotdCadence);
+  const md = (ts) => new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric' }).format(new Date(ts * 1000));
+  const range = `${md(since)}–${md(t).replace(md(since).split(' ')[0] + ' ', '')}`;
+  const n = {
+    newLive: (await q('SELECT COUNT(*) AS n FROM entries WHERE status = \'live\' AND is_test = 0 AND live_at > ?', since)).n,
+    allLive: (await q('SELECT COUNT(*) AS n FROM entries WHERE status = \'live\' AND is_test = 0')).n,
+    offWeek: (await q('SELECT COUNT(*) AS n FROM owners WHERE heart_mail_off = 1 AND heart_mail_off_at > ?', since)).n,
+    offAll: (await q('SELECT COUNT(*) AS n FROM owners WHERE heart_mail_off = 1')).n,
+    pending: (await q('SELECT COUNT(*) AS n FROM entries WHERE status = \'pending\'')).n,
+    heartsWeek: (await q('SELECT COUNT(*) AS n FROM hearts hh JOIN entries e ON e.id = hh.entry_id WHERE e.is_test = 0 AND hh.day >= ?', centralDay(since * 1000))).n,
+    hearts: (await q('SELECT COALESCE(SUM(hearts),0) AS n FROM entries WHERE is_test = 0')).n,
+    notes: (await q('SELECT COUNT(*) AS n FROM notices WHERE kind = \'hearts\' AND status = \'sent\' AND sent_at > ?', since)).n,
+    notePeople: (await q('SELECT COUNT(DISTINCT to_email) AS n FROM notices WHERE kind = \'hearts\' AND status = \'sent\' AND sent_at > ?', since)).n,
+    phones: (await q('SELECT COUNT(*) AS n FROM push_subs')).n,
+    requests: (await q('SELECT COUNT(*) AS n FROM requests WHERE status = \'new\'')).n,
+    fails: (await q('SELECT COUNT(*) AS n FROM failures WHERE at > ?', since)).n,
+  };
+  // Evening emails by evening (11/16: “21” alone said nothing; it was the same eight people on three evenings).
+  const { results: noteRows } = await env.DB.prepare('SELECT sent_at FROM notices WHERE kind = \'hearts\' AND status = \'sent\' AND sent_at > ? ORDER BY sent_at').bind(since).all();
+  const evenings = {};
+  for (const r of noteRows) { const d = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', weekday: 'short' }).format(new Date(r.sent_at * 1000)); evenings[d] = (evenings[d] || 0) + 1; }
+  const byEvening = Object.entries(evenings).map(([d, k]) => `${d} ${k}`).join(' · ');
+  const rows = [
+    [`New dogs on the wall: ${n.newLive} this week, ${n.allLive} in all`, 'Dogs that went up this week, and every dog on the wall now (In Memory included).'],
+    [`Waiting for your look: ${n.pending}`, 'Posts the screener held back for you to put up or turn down (the queue on the admin page).'],
+    [`Hearts: ${n.heartsWeek} this week, ${n.hearts} in all`, 'Hearts visitors left on the dogs (one per person, per dog, per day).'],
+    [n.notes ? `Evening emails: ${n.notes}, to ${n.notePeople} ${n.notePeople === 1 ? 'person' : 'people'} on ${Object.keys(evenings).length} ${Object.keys(evenings).length === 1 ? 'evening' : 'evenings'} (${byEvening})` : 'Evening emails: none',
+      'Each evening between 6 and 8, everyone who has posted a dog gets one short email if there’s news for them: new hearts on their dog, or new dogs from other people. No news, no email; never more than one a day.'],
+    [`Turned the emails off: ${n.offWeek} this week, ${n.offAll} in all`, 'People who have posted and tapped “Turn these emails off” (or their mail app’s Unsubscribe) in an evening note or the ' + f.name + ' email. Their dogs stay on the wall. Who and when: the admin page.'],
+    [`Phones getting the ${f.name}: ${n.phones}`, `Phones that turned on the ${f.weekly ? 'Monday-morning' : 'morning'} notification about the ${f.name}. iPhones can only do it from the wall saved to the home screen.`],
+    [`Background requests waiting: ${n.requests}`, 'Backgrounds visitors asked for that you haven’t marked done.'],
+    [`Failures this week: ${n.fails}`, n.fails ? 'Things that broke, each one explained on the admin page.' : 'Nothing broke.'],
+  ];
+  return {
+    subject: `Dedication Wall, this week (${range})`,
+    text: `The seven days to Monday morning, ${range}.\n\n${rows.map(([a, b]) => `${a}\n${b}`).join('\n\n')}\n\nAdmin: ${site(env)}/admin`,
+    html: `<p>The seven days to Monday morning, ${h(range)}.</p>${rows.map(([a, b]) => `<p style="margin:0 0 12px"><strong>${h(a)}</strong><br><span style="color:#6f665d">${h(b)}</span></p>`).join('')}<p><a href="${site(env)}/admin">Admin</a></p>`,
+  };
 }
 
 // The nightly canary: one tiny call to Anthropic and one to Cloudflare Images, so an expired key or a
