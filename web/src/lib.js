@@ -1,5 +1,7 @@
 // Shared helpers for the Worker: time, ids, crypto, JSON, mail, screening.
 
+import { explainFailure, device } from './explain.js';
+
 const enc = new TextEncoder();
 
 export const now = () => Math.floor(Date.now() / 1000);
@@ -119,10 +121,12 @@ export function uaFamily(ua = '') {
   const br = /CriOS|Chrome/.test(ua) && !/Edg/.test(ua) ? 'Chrome' : /FxiOS|Firefox/.test(ua) ? 'Firefox' : /Edg/.test(ua) ? 'Edge' : /Safari/.test(ua) ? 'Safari' : 'other';
   return `${br}/${os}`;
 }
-export async function failure(env, kind, detail, { visitor = null, ua = null } = {}) {
+// email: the person's sign-in email when they were signed in (11/16), so the admin page can say whether they
+// got through afterwards.
+export async function failure(env, kind, detail, { visitor = null, ua = null, email = null } = {}) {
   try {
-    await env.DB.prepare('INSERT INTO failures (at, kind, detail, visitor, ua) VALUES (?,?,?,?,?)')
-      .bind(now(), kind, String(detail || '').slice(0, 300), visitor, ua ? uaFamily(ua) : null).run();
+    await env.DB.prepare('INSERT INTO failures (at, kind, detail, visitor, ua, email) VALUES (?,?,?,?,?,?)')
+      .bind(now(), kind, String(detail || '').slice(0, 300), visitor, ua ? uaFamily(ua) : null, email).run();
   } catch (e) { console.error('failure row', kind, String(e).slice(0, 120)); }
 }
 export async function alertIfNeeded(env, kind, { force = false } = {}) {
@@ -134,8 +138,12 @@ export async function alertIfNeeded(env, kind, { force = false } = {}) {
     const mark = await env.DB.prepare('SELECT last_at FROM alert_marks WHERE kind = ?').bind(kind).first();
     if (!force && mark && t - mark.last_at < ALERT_REST) return false;
     await env.DB.prepare('INSERT INTO alert_marks (kind, last_at) VALUES (?,?) ON CONFLICT(kind) DO UPDATE SET last_at = excluded.last_at').bind(kind, t).run();
-    const last = await env.DB.prepare('SELECT at, detail, ua FROM failures WHERE kind = ? ORDER BY at DESC LIMIT 3').bind(kind).all();
-    const lines = (last.results || []).map((r) => `${centralDateTime(r.at)} · ${r.detail || ''}${r.ua ? ` · ${r.ua}` : ''}`);
+    const last = await env.DB.prepare('SELECT at, kind, detail, ua, email FROM failures WHERE kind = ? ORDER BY at DESC LIMIT 3').bind(kind).all();
+    // In plain words first, the raw message after (11/16).
+    const lines = (last.results || []).map((r) => {
+      const x = explainFailure(r);
+      return `${centralDateTime(r.at)} · ${x.what}${r.email ? ` · ${r.email}` : ''}${r.ua ? ` · ${device(r.ua)}` : ''} (${r.detail || ''})`;
+    });
     const label = FAILURE_LABEL[kind] || kind;
     const site = env.SITE_URL || 'https://dedication.jetsonsjourney.com';
     await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'alert',

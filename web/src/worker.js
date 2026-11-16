@@ -6,6 +6,7 @@ import {
   json, html, bad, escapeHtml as h, validEmail, visitorHash, sendMail, screen, suggestLines,
   failure, alertIfNeeded, sense, FAILURE_LABEL, anthropic, uaFamily, newVapidKeys, encryptPush, sendPush, validZone,
 } from './lib.js';
+import { explainFailure, device, TRYING, groupFailures } from './explain.js';
 import { wallPage, dogPage, simplePage, notFoundPage, picV } from './pages.js';
 
 const TERMS_VERSION_FALLBACK = 'terms-of-use-2026-05-16';
@@ -67,7 +68,7 @@ export default {
       return env.ASSETS.fetch(request);
     } catch (e) {
       console.error('worker error', p, e);
-      ctx.waitUntil(sense(env, p === '/api/post' ? 'post' : 'server', `${p}: ${String(e).slice(0, 200)}`, { ua: request.headers.get('user-agent') }));
+      ctx.waitUntil((async () => sense(env, p === '/api/post' ? 'post' : 'server', `${p}: ${String(e).slice(0, 200)}`, { ua: request.headers.get('user-agent'), email: await whoIs(env, request) }))());
       return p.startsWith('/api/') ? bad('server error', 500) : html(notFoundPage(), 500);
     }
   },
@@ -1061,7 +1062,7 @@ async function suggest(env, request) {
   if ((all?.n || 0) >= SUGGEST_PER_DAY) { await sense(env, 'cap', 'word help: the whole site at the daily limit'); return bad('word help is resting for today', 429); }
   await env.DB.prepare('INSERT INTO suggest_uses (visitor, day, n) VALUES (?,?,1) ON CONFLICT(visitor, day) DO UPDATE SET n = n + 1').bind(vh, day).run();
   const r = await suggestLines(env, { mode, name, about });
-  if (!r.ok) { console.error('suggest', r.error); await sense(env, 'words', r.error, { visitor: vh, ua: request.headers.get('user-agent') }); return bad('no lines just now', 503); }
+  if (!r.ok) { console.error('suggest', r.error); await sense(env, 'words', r.error, { visitor: vh, ua: request.headers.get('user-agent'), email: await whoIs(env, request) }); return bad('no lines just now', 503); }
   return json({ ok: true, lines: r.lines });
 }
 
@@ -1099,7 +1100,7 @@ async function cutout(env, request, ctx) {
     if (!r.ok || !ct.startsWith('image/png')) {
       console.error('cutout', r.status, ct, resized);
       ctx.waitUntil(cleanup());
-      ctx.waitUntil(sense(env, 'cutout', `images ${r.status} ${ct} ${resized}`.trim(), { visitor: vh, ua: request.headers.get('user-agent') }));
+      ctx.waitUntil(sense(env, 'cutout', `images ${r.status} ${ct} ${resized}`.trim(), { visitor: vh, ua: request.headers.get('user-agent'), email: await whoIs(env, request) }));
       return bad('cutout is not available right now', 503);
     }
     const png = await r.arrayBuffer();
@@ -1108,14 +1109,20 @@ async function cutout(env, request, ctx) {
   } catch (e) {
     console.error('cutout', String(e).slice(0, 200));
     ctx.waitUntil(cleanup());
-    ctx.waitUntil(sense(env, 'cutout', String(e).slice(0, 200), { visitor: vh, ua: request.headers.get('user-agent') }));
+    ctx.waitUntil(sense(env, 'cutout', String(e).slice(0, 200), { visitor: vh, ua: request.headers.get('user-agent'), email: await whoIs(env, request) }));
     return bad('cutout is not available right now', 503);
   }
 }
 
+// Who's signed in on this request, if anyone: kept with a failure so the admin page can say whether they got
+// through afterwards (11/16). Swept with the failures after 30 days.
+async function whoIs(env, request) {
+  try { return (await readSession(secret(env), request.headers.get('cookie')))?.email || null; } catch { return null; }
+}
+
 // ---------------------------------------------------------------- the page's own errors
 // POST /api/log {detail, step}: a JavaScript error or a dead call, reported by the maker. Five per
-// visitor a day; nothing personal is kept, only the message, the step and the browser family.
+// visitor a day; kept: the message, the step, the browser family and, if they're signed in, their email.
 async function pageError(env, request, ctx) {
   const body = await request.json().catch(() => ({}));
   const detail = String(body.detail || '').replace(/\s+/g, ' ').trim().slice(0, 240);
@@ -1126,7 +1133,7 @@ async function pageError(env, request, ctx) {
   const vh = await visitorHash(request, secret(env));
   const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM failures WHERE kind = \'page\' AND visitor = ? AND at > ?').bind(vh, now() - 86400).first())?.n || 0;
   if (n >= 5) return json({ ok: true, kept: false });
-  ctx.waitUntil(sense(env, 'page', `${step ? `[${step}] ` : ''}${detail}`, { visitor: vh, ua: request.headers.get('user-agent') }));
+  ctx.waitUntil(sense(env, 'page', `${step ? `[${step}] ` : ''}${detail}`, { visitor: vh, ua: request.headers.get('user-agent'), email: await whoIs(env, request) }));
   return json({ ok: true, kept: true });
 }
 
@@ -1333,6 +1340,21 @@ async function admin(env, request, url) {
   return bad('no such admin route', 404);
 }
 
+// The failure list in plain words (11/16): grouped, explained, and for someone who was signed in while trying
+// to post, whether they got through afterwards.
+async function describeFailures(env, rows) {
+  const out = groupFailures(rows);
+  for (const f of out) {
+    f.x = explainFailure(f);
+    if (f.email && TRYING(f)) {
+      const e = await env.DB.prepare('SELECT id, dog_name, created_at FROM entries WHERE owner_email = ? AND created_at >= ? ORDER BY created_at ASC LIMIT 1').bind(f.email, f.first - 60).first();
+      f.after = e ? `Got through: <a href="/d/${h(e.id)}">${h(e.dog_name)}</a>, ${h(centralDateTime(e.created_at))}` : 'Hasn’t posted since';
+      f.afterText = e ? `got through: ${e.dog_name}, ${centralDateTime(e.created_at)}` : 'hasn’t posted since';
+    }
+  }
+  return out;
+}
+
 async function adminPage(env, request, url) {
   if (!(await adminAuth(env, request, url))) return adminSignInPage(env, request);
   const headers = { 'x-robots-tag': 'noindex, nofollow' };
@@ -1347,7 +1369,8 @@ async function adminPage(env, request, url) {
   const { results: reqs } = await env.DB.prepare('SELECT id, text, email, created_at FROM requests WHERE status = \'new\' ORDER BY created_at DESC LIMIT 50').all();
   const { results: liveRows } = await env.DB.prepare('SELECT id, dog_name, line, owner_email, hearts, live_at, is_test FROM entries WHERE status = \'live\' ORDER BY live_at DESC LIMIT 50').all();
   const { results: counts } = await env.DB.prepare('SELECT status, COUNT(*) AS n FROM entries GROUP BY status').all();
-  const { results: fails } = await env.DB.prepare('SELECT at, kind, detail, ua FROM failures WHERE at > ? ORDER BY at DESC LIMIT 20').bind(now() - 86400).all();
+  const { results: failRows } = await env.DB.prepare('SELECT at, kind, detail, ua, visitor, email FROM failures WHERE at > ? ORDER BY at DESC LIMIT 40').bind(now() - 86400).all();
+  const fails = await describeFailures(env, failRows);
   // Asked for a sign-in in the last week and never posted (11/11: a friend asked whether she “did it right”
   // and nothing showed where she stopped). Signed in = the newest link or code was used.
   const { results: stalled } = await env.DB.prepare(`SELECT o.email, o.link_sent_at, o.links_n, o.magic_token IS NULL AS signed_in FROM owners o
@@ -1371,8 +1394,11 @@ ${stalled.length ? `<ul class="small">${stalled.map((o) => `<li><a href="mailto:
 </form>
 <h2>Background requests (${reqs.length} open)</h2>
 ${reqs.length ? `<ul class="small">${reqs.map((r) => `<li>${h(centralDateTime(r.created_at))} · <em>${h(r.text)}</em>${r.email ? ` · <a href="mailto:${h(r.email)}?subject=Your%20background%20request">${h(r.email)}</a>` : ''} · <button class="btn quiet" style="padding:4px 10px;font-size:13px" onclick="closeRequest('${h(r.id)}')">Done</button></li>`).join('')}</ul>` : '<p class="small">None open.</p>'}
-<h2>Last 24 hours (${fails.length} failure${fails.length === 1 ? '' : 's'})</h2>
-${fails.length ? `<ul class="small">${fails.map((f) => `<li>${h(centralDateTime(f.at))} · <strong>${h(FAILURE_LABEL[f.kind] || f.kind)}</strong> · ${h(f.detail || '')}${f.ua ? ` · ${h(f.ua)}` : ''}</li>`).join('')}</ul>` : '<p class="small">Nothing failed.</p>'}
+<h2>Last 24 hours (${failRows.length} failure${failRows.length === 1 ? '' : 's'})</h2>
+${fails.length ? `<ul>${fails.map((f) => `<li style="margin-bottom:12px"><strong>${h(f.x.what)}</strong>${f.n > 1 ? ` (${f.n} times)` : ''}
+<div class="small">${h(centralDateTime(f.at))}${f.ua ? ` · ${h(device(f.ua))}` : ''}${f.email ? ` · ${h(f.email)}` : ''}${f.after ? ` · <strong>${f.after}</strong>` : ''}</div>
+<div class="small">${h(f.x.saw)}${f.x.todo ? ` <em>What to do:</em> ${h(f.x.todo)}` : ''}</div>
+<div class="small" style="color:#8a8178">${h(FAILURE_LABEL[f.kind] || f.kind)}: ${h(f.detail || '')}</div></li>`).join('')}</ul>` : '<p class="small">Nothing failed.</p>'}
 <p class="small">An email comes when one kind fails three times in an hour (posting: once), then rests six hours. <button class="btn quiet" style="padding:4px 10px;font-size:13px" onclick="testAlert()">Send a test alert</button> <span class="small" id="tested"></span></p>
 <p class="small">Entries: ${counts.map((c) => `${h(c.status)} ${c.n}`).join(' · ') || 'none'}. Posting on the live site: <strong>${postingOn(env) ? 'ON' : 'OFF'}</strong> (a deploy variable, not a switch here).</p>
 <script>
@@ -1397,13 +1423,14 @@ async function daily(env) {
   const q = async (sql, ...b) => (await env.DB.prepare(sql).bind(...b).first());
   // What broke yesterday: one email, only when something did. Then the canary, then the sweep.
   try {
-    const { results: byKind } = await env.DB.prepare('SELECT kind, COUNT(*) AS n FROM failures WHERE at > ? AND at <= ? GROUP BY kind ORDER BY n DESC').bind(t - 86400, t).all();
-    if (byKind.length && env.CONTACT_EMAIL) {
-      const total = byKind.reduce((a, r) => a + r.n, 0);
-      const line = byKind.map((r) => `${FAILURE_LABEL[r.kind] || r.kind} ${r.n}`).join(' · ');
-      await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'digest', subject: `Dedication Wall: what broke yesterday (${total})`,
-        text: `${line}\n\nThe last 24 hours, line by line: ${site(env)}/admin`,
-        html: `<p>${h(line)}</p><p><a href="${site(env)}/admin">The last 24 hours, line by line</a></p>` });
+    const { results: rows } = await env.DB.prepare('SELECT at, kind, detail, ua, visitor, email FROM failures WHERE at > ? AND at <= ? ORDER BY at ASC LIMIT 60').bind(t - 86400, t).all();
+    if (rows.length && env.CONTACT_EMAIL) {
+      // One item per failure, in plain words (11/16), with what to do and whether the person got through.
+      const list = await describeFailures(env, rows);
+      const one = (f) => `${centralDateTime(f.at)}: ${f.x.what}${f.n > 1 ? ` (${f.n} times)` : ''}${f.email ? ` ${f.email}` : ''}${f.afterText ? `, ${f.afterText}` : ''}.${f.x.todo ? ` What to do: ${f.x.todo}` : ''}`;
+      await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'digest', subject: `Dedication Wall: what broke yesterday (${rows.length})`,
+        text: `${list.map(one).join('\n\n')}\n\nThe details: ${site(env)}/admin`,
+        html: `<ul>${list.map((f) => `<li style="margin-bottom:10px"><strong>${h(f.x.what)}</strong>${f.n > 1 ? ` (${f.n} times)` : ''}<br><span style="color:#6f665d">${h(centralDateTime(f.at))}${f.ua ? ` · ${h(device(f.ua))}` : ''}${f.email ? ` · ${h(f.email)}` : ''}${f.afterText ? ` · ${h(f.afterText)}` : ''}</span><br>${h(f.x.saw)}${f.x.todo ? ` <em>What to do:</em> ${h(f.x.todo)}` : ''}</li>`).join('')}</ul><p><a href="${site(env)}/admin">The details on the admin page</a></p>` });
     }
   } catch (err) { console.error('failure digest', err); }
   await canary(env);
