@@ -258,7 +258,8 @@ async function post(env, request, ctx) {
   const sess = await requireSession(env, request);
   if (!sess) return bad('sign in first', 401);
   const form = await request.formData().catch(() => null);
-  if (!form) return bad('expected multipart form data');
+  // Say what did arrive, so a broken upload can be told apart from a wrong one in the failure log (11/16).
+  if (!form) return bad(`expected multipart form data (got ${(request.headers.get('content-type') || 'none').split(';')[0]}, ${request.headers.get('content-length') || '?'} bytes)`);
 
   const dog_name = String(form.get('dog_name') || '').trim().slice(0, 40);
   const line = String(form.get('line') || '').trim().slice(0, 120);
