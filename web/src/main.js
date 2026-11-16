@@ -863,7 +863,7 @@ $('#post-form').addEventListener('submit', async (ev) => {
     fd.set('mode', state.mode === 'inMemory' ? 'in_memory' : 'for');
     fd.set('background_id', state.bg.id);
     fd.set('attest', 'on'); fd.set('newsletter', $('#post-news').checked ? 'on' : 'off');
-    fd.set('original', state.photo.file, state.photo.file.name || 'original.jpg');
+    fd.set('original', await freshOriginal());
     fd.set('story', story); fd.set('feed', feed); fd.set('card', card);
     btn.textContent = 'Posting…'; status.textContent = '';
     const r = await fetch('/api/post', { method: 'POST', body: fd });
@@ -891,6 +891,28 @@ $('#post-form').addEventListener('submit', async (ev) => {
   }
 });
 $('#done-again').addEventListener('click', () => { location.href = '/'; });
+
+// The original photo, read fresh into memory just before it's sent (11/16). Two posts from an iPhone on 11/15
+// reached the wall as broken uploads (“expected multipart form data”) and got through an hour later. The photo
+// is kept on the phone while the person fetches the sign-in code, and an iPhone can lose a kept file even
+// though its picture still shows. Reading it first catches that; if it can't be read, the picture already on
+// screen is saved as a JPEG instead (up to 4000 px on the long side), so the post still goes.
+async function freshOriginal() {
+  const f = state.photo.file;
+  const name = (f && f.name) || 'original.jpg';
+  try {
+    const buf = await f.arrayBuffer();
+    if (buf.byteLength > 0) return new File([buf], name, { type: f.type || 'image/jpeg' });
+  } catch { /* lost: redraw it below */ }
+  const img = state.photo.img;
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  const k = Math.min(1, 4000 / Math.max(iw, ih));
+  const c = document.createElement('canvas'); c.width = Math.round(iw * k); c.height = Math.round(ih * k);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.92));
+  track('original_redrawn');
+  return new File([blob], 'original.jpg', { type: 'image/jpeg' });
+}
 
 // ---------- keep the wall on your phone ----------
 // Shown once, after posting, on phones only, and never inside the home-screen app itself. Android Chrome
