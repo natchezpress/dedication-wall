@@ -37,6 +37,7 @@ export default {
       if (p === '/api/request' && request.method === 'POST') return requestBackground(env, request);
       if (p === '/api/heart' && request.method === 'POST') return heart(env, request);
       if (p === '/api/hearts' && (request.method === 'GET' || request.method === 'POST')) return heartSwitch(env, request);
+      if (p === '/api/resend' && request.method === 'POST') return resendHook(env, request);
       if (p === '/api/push/key' && request.method === 'GET') return pushKey(env);
       if (p === '/api/push/subscribe' && request.method === 'POST') return pushSubscribe(env, request, ctx);
       if (p === '/api/push/unsubscribe' && request.method === 'POST') return pushUnsubscribe(env, request);
@@ -58,6 +59,7 @@ export default {
       if (p.startsWith('/api/admin')) return admin(env, request, url);
       // Local and preview only: run the evening-note tick at a chosen time and see what it sent.
       if (p === '/api/dev/morning' && devMode(env)) return json({ ok: true, out: await morning(env, Number(url.searchParams.get('ts')) || Date.now()) });
+      if (p === '/api/dev/yesterday' && devMode(env)) return json({ ok: true, email: await yesterdayEmail(env, Math.floor((Number(url.searchParams.get('ts')) || Date.now()) / 1000)) });
       if (p === '/api/dev/week' && devMode(env)) return json({ ok: true, ...(await weekSummary(env, Math.floor((Number(url.searchParams.get('ts')) || Date.now()) / 1000))) });
       if (p === '/api/dev/hearts' && devMode(env)) return json({ ok: true, sent: await eveningNotes(env, Number(url.searchParams.get('ts')) || Date.now()) });
       if (p.startsWith('/api/')) return bad('no such route', 404);
@@ -393,7 +395,10 @@ async function notifyLive(env, e) {
     html: branded(env, `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p><strong>Keep the wall on your phone</strong>, so you can easily come back, see who’s new, and ${f.meet}.</p>${homeStepsHtml(env, 'live-email', f)}<p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>`) });
 }
 
-// ---------------------------------------------------------------- evening notes (hearts and new dogs)
+// ---------------------------------------------------------------- evening notes (hearts nightly, new dogs on Sundays)
+// 11/16 (Brock): an evening note goes only on an evening someone's own dog got new hearts; other people's new
+// dogs wait for one Sunday-evening roundup of the week, with pictures (sent only in weeks with new dogs). Still
+// never more than one wall email a day: on a Sunday with hearts too, it's all one email.
 // Everyone with a dog on the wall hears what happened since their last note: new hearts on their own dogs,
 // and dogs other people put up. Once, on the first hourly tick after heart emails shipped (7 a.m. to 9 p.m.
 // Central), everyone whose dogs already had hearts got a catch-up note about hearts alone. From then on:
@@ -414,6 +419,7 @@ async function eveningNotes(env, ts = Date.now()) {
   if (pending && hour >= NOTE_CATCHUP[0] && hour < NOTE_CATCHUP[1]) kind = 'catchup';
   else if (hour >= NOTE_EVENING[0] && hour < NOTE_EVENING[1]) kind = 'daily';
   if (!kind) return [];
+  const roundup = weekday(day) === 0; // Sunday: the week's new dogs come along
   const { results: owners } = await env.DB.prepare(`SELECT email, mail_key, news_at, told_morning FROM owners
     WHERE heart_mail_off = 0 AND (heart_mail_day IS NULL OR heart_mail_day != ?)
       AND EXISTS (SELECT 1 FROM entries WHERE owner_email = owners.email AND status = 'live' AND is_test = 0)
@@ -426,7 +432,7 @@ async function eveningNotes(env, ts = Date.now()) {
     if (!mine.length) continue;
     const dogs = mine.filter((e) => e.hearts > e.hearts_mailed);
     let news = [];
-    if (kind === 'daily') {
+    if (kind === 'daily' && roundup) {
       const since = o.news_at ?? Math.min(...mine.map((e) => e.live_at));
       news = live.filter((e) => e.owner_email !== o.email && e.live_at > since && e.live_at <= at).reverse(); // newest first, like the wall
     }
@@ -437,13 +443,14 @@ async function eveningNotes(env, ts = Date.now()) {
         key = (await sha256(`${secret(env)}|hearts|${o.email}`)).slice(0, 32);
         await env.DB.prepare('UPDATE owners SET mail_key = ? WHERE email = ?').bind(key, o.email).run();
       }
-      const m = noteBody(env, { kind, dogs, news, key, mine, tell: kind === 'daily' && !o.told_morning, f });
+      const m = noteBody(env, { kind, dogs, news, key, mine, tell: kind === 'daily' && !o.told_morning, f, week: roundup });
       await env.DB.prepare('UPDATE owners SET heart_mail_day = ? WHERE email = ?').bind(day, o.email).run();
       const r = await sendMail(env, { to: o.email, kind: 'hearts', entry_id: (dogs[0] || mine[0]).id, subject: m.subject, text: m.text, html: m.html,
         headers: { 'List-Unsubscribe': `<${m.off}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } });
       if (r.status !== 'failed') {
         const done = dogs.map((d) => env.DB.prepare('UPDATE entries SET hearts_mailed = ? WHERE id = ? AND hearts_mailed < ?').bind(d.hearts, d.id, d.hearts));
-        if (kind === 'daily') done.push(env.DB.prepare('UPDATE owners SET news_at = ? WHERE email = ?').bind(at, o.email));
+        // Only a Sunday note carries the week's dogs, so only then is the news counted as told.
+        if (kind === 'daily' && roundup) done.push(env.DB.prepare('UPDATE owners SET news_at = ? WHERE email = ?').bind(at, o.email));
         if (kind === 'daily' && !o.told_morning) done.push(env.DB.prepare('UPDATE owners SET told_morning = 1 WHERE email = ?').bind(o.email));
         if (done.length) await env.DB.batch(done);
       }
@@ -457,7 +464,7 @@ async function eveningNotes(env, ts = Date.now()) {
 }
 
 // tell: open with the one-time "New: the Dog of the Week on your phone" section (once per owner).
-function noteBody(env, { kind, dogs, news, key, mine = dogs, tell = false, f = feature() }) {
+function noteBody(env, { kind, dogs, news, key, mine = dogs, tell = false, f = feature(), week = false }) {
   const src = kind === 'catchup' ? 'heart-catchup' : 'heart-email';
   const utm = (s) => `utm_source=${s}&utm_medium=email&utm_campaign=ops-57`;
   const off = `${site(env)}/api/hearts?k=${key}`;
@@ -494,7 +501,7 @@ function noteBody(env, { kind, dogs, news, key, mine = dogs, tell = false, f = f
   if (kind === 'catchup') {
     const names = and(dogs.map((d) => d.dog_name));
     const share = `${site(env)}/i/${d0.invite_code}?utm_source=share&utm_medium=referral&utm_campaign=ops-57`;
-    const later = `From here on, we’ll send a short note on any evening ${one ? d0.dog_name : 'your dogs'} get${one ? 's' : ''} new hearts or a new dog joins the wall, never more than one a day.`;
+    const later = `From here on, we’ll send a short note on any evening ${one ? d0.dog_name : 'your dogs'} get${one ? 's' : ''} new hearts, and on Sundays a look at the week’s new dogs. Never more than one a day.`;
     subject = `People are leaving hearts for ${names}`;
     if (one) {
       text = `Since ${d0.dog_name} went up on the Dedication Wall, people have been stopping by and leaving hearts: ${rows[0].count}.\n\nSee ${d0.dog_name}’s page:\n${rows[0].page}\n\nShare ${d0.dog_name}’s link and more friends can leave one:\n${share}\n\n${later}`;
@@ -530,8 +537,8 @@ function noteBody(env, { kind, dogs, news, key, mine = dogs, tell = false, f = f
     const page = (e) => `${site(env)}/d/${e.id}?${utm('wall-news')}`;
     const named = news.length <= 3 ? and(news.map((e) => e.dog_name)) : `${news[0].dog_name}, ${news[1].dog_name}, and ${news.length - 2} more`;
     const isNew = news.length === 1 ? `${news[0].dog_name} is new on the wall` : `${news.length <= 3 ? named : `${news.length} dogs`} are new on the wall`;
-    subject = subject ? `${subject}, and ${isNew}` : `New on the wall: ${named}`;
-    const head = dogs.length ? 'Also new on the wall:' : 'New on the wall:';
+    subject = subject ? `${subject}, and ${isNew}` : (week ? `This week on the wall: ${named}` : `New on the wall: ${named}`);
+    const head = week ? (dogs.length ? 'Also, new on the wall this week:' : 'New on the wall this week:') : (dogs.length ? 'Also new on the wall:' : 'New on the wall:');
     const tap = news.length === 1 ? `Tap ${news[0].dog_name} to read the dedication and leave a heart.` : 'Tap a dog to read the dedication and leave a heart.';
     text += `${text ? '\n\n' : ''}${head}\n\n${shown.map((e) => `${label(e)}\n${page(e)}`).join('\n\n')}${extra ? `\n\nAnd ${extra} more on the wall:\n${wall}` : ''}\n\n${tap}`;
     inner += `<p style="margin-bottom:8px">${head}</p>${grid(shown.map((e) => ({ e, href: page(e), label: label(e) })))}`
@@ -543,6 +550,72 @@ function noteBody(env, { kind, dogs, news, key, mine = dogs, tell = false, f = f
     inner = `<div style="background:#fffaf2;border:1px solid #e3d8c6;border-radius:14px;padding:14px 16px;margin:0 0 20px;font-size:15px;line-height:1.5"><p style="margin:0 0 8px;font-size:17px"><strong>${f.tellHead}</strong> ${f.tellBody} Put the wall on your phone in two steps.</p>${homeStepsHtml(env, 'news-push', f)}</div>${inner}`;
   }
   return { subject, text: text + foot, html: wrap(inner), off };
+}
+
+// ---------------------------------------------------------------- stepping back (11/16)
+// Brock: “can you tell me when someone disengages.” Every way someone steps back is kept with when, shown on the
+// admin page, in the next morning's 7 a.m. email and in the Monday summary.
+async function stepBack(env, kind, email, detail) {
+  try {
+    await env.DB.prepare('INSERT INTO stepbacks (at, kind, email, detail) VALUES (?,?,?,?)').bind(now(), kind, email || null, detail ? String(detail).slice(0, 200) : null).run();
+  } catch (err) { console.error('stepback', kind, String(err).slice(0, 120)); }
+}
+async function dogsOf(env, email) {
+  const r = await env.DB.prepare('SELECT GROUP_CONCAT(dog_name, \', \') AS d FROM entries WHERE owner_email = ? AND status = \'live\'').bind(email).first();
+  return r?.d || null;
+}
+// One step back in plain words.
+function stepWords(x, f = feature()) {
+  const who = x.email || 'Someone';
+  const invite = /^invite/.test(x.detail || '');
+  const subj = x.detail && !invite ? ` (“${x.detail}”)` : '';
+  switch (x.kind) {
+    case 'mail_off': return `${who} turned the evening emails off${x.detail ? ` (${x.detail})` : ''}.`;
+    case 'mail_on': return `${who} turned the evening emails back on${x.detail ? ` (${x.detail})` : ''}.`;
+    case 'spam': return invite ? 'An invited friend marked their invitation as spam. They won’t be invited again.' : `${who} marked a wall email as spam${subj}. The wall has stopped emailing them.`;
+    case 'bounce': return invite ? 'An invitation bounced: the address doesn’t work.' : `An email to ${who} bounced${subj}: the address doesn’t work, so the wall stopped emailing it.`;
+    case 'push_off': return `A phone turned off the ${f.name} notification.`;
+    case 'dog_removed': return `${who} took ${x.detail || 'their dog'} off the wall.`;
+    case 'invite_off': return 'An invited friend said “don’t email me again.”';
+    default: return `${who}: ${x.kind}.`;
+  }
+}
+
+// POST /api/resend: Resend tells the wall when someone marks a wall email as spam or an email bounces for good
+// (a webhook, signed with RESEND_WEBHOOK_SECRET, which Brock pasted into Cloudflare). The wall then stops
+// emailing that address: an owner's evening notes go off; an invited friend is never invited again. A spam
+// report matters most: too many and Gmail starts filtering the sign-in codes too.
+async function resendHook(env, request) {
+  const sec = env.RESEND_WEBHOOK_SECRET;
+  if (!sec) return bad('not set up', 503);
+  const id = request.headers.get('svix-id'), ts = request.headers.get('svix-timestamp'), sigs = request.headers.get('svix-signature') || '';
+  const body = await request.text();
+  if (!id || !ts || Math.abs(Date.now() / 1000 - Number(ts)) > 300) return bad('stale or unsigned', 400);
+  const key = await crypto.subtle.importKey('raw', Uint8Array.from(atob(sec.replace(/^whsec_/, '')), (c) => c.charCodeAt(0)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${id}.${ts}.${body}`)));
+  const want = btoa(String.fromCharCode(...mac));
+  if (!sigs.split(' ').some((x) => x.split(',')[1] === want)) return bad('bad signature', 401);
+  let ev; try { ev = JSON.parse(body); } catch { return bad('bad json'); }
+  const d = ev.data || {};
+  let kind = null;
+  if (ev.type === 'email.complained') kind = 'spam';
+  else if (ev.type === 'email.bounced') {
+    const bt = String(d.bounce?.type || '').toLowerCase();
+    if (bt && !/perm|hard/.test(bt)) return json({ ok: true, ignored: 'a bounce for now (full mailbox and the like)' });
+    kind = 'bounce';
+  } else return json({ ok: true, ignored: ev.type || 'unknown' });
+  const subject = String(d.subject || '').slice(0, 120);
+  for (const to of [].concat(d.to || []).map((x) => String(x).toLowerCase().trim()).filter(Boolean)) {
+    const owner = await env.DB.prepare('SELECT email FROM owners WHERE email = ?').bind(to).first();
+    if (owner) {
+      await env.DB.prepare('UPDATE owners SET heart_mail_off = 1, heart_mail_off_at = COALESCE(heart_mail_off_at, ?) WHERE email = ?').bind(now(), to).run();
+      await stepBack(env, kind, to, subject);
+    } else {
+      await env.DB.prepare('INSERT OR IGNORE INTO suppressed (to_hash, added_at) VALUES (?,?)').bind(await inviteeHash(env, to), now()).run();
+      await stepBack(env, kind, null, `invite: ${subject}`);
+    }
+  }
+  return json({ ok: true, kind });
 }
 
 // The off switch in every evening note. The GET only shows a page with one button, because mail scanners
@@ -561,15 +634,16 @@ async function heartSwitch(env, request) {
     // Keep when they turned it off (11/16), for the admin page and the Monday summary; only the first tap counts.
     await env.DB.prepare('UPDATE owners SET heart_mail_off = ?, heart_mail_off_at = CASE WHEN ? = 1 THEN COALESCE(heart_mail_off_at, ?) ELSE NULL END WHERE email = ?')
       .bind(want === 'off' ? 1 : 0, want === 'off' ? 1 : 0, now(), o.email).run();
+    if ((want === 'off') !== !!o.heart_mail_off) await stepBack(env, want === 'off' ? 'mail_off' : 'mail_on', o.email, await dogsOf(env, o.email));
     return html(simplePage({ title: want === 'off' ? 'Emails are off' : 'Emails are on', noindex: true,
       bodyHtml: want === 'off'
         ? `<p>You won’t get our evening notes anymore. Your dogs stay on the wall, and their hearts keep counting.</p>${onForm(' quiet')}<p><a href="/wall">See the wall</a></p>`
-        : '<p>You’ll get a short note on any evening there’s news: new hearts for your dogs or a new dog on the wall. Never more than one a day.</p><p><a href="/wall">See the wall</a></p>' }));
+        : '<p>You’ll get a short note on any evening your dogs get new hearts, and on Sundays a look at the week’s new dogs. Never more than one a day.</p><p><a href="/wall">See the wall</a></p>' }));
   }
   return html(simplePage({ title: o.heart_mail_off ? 'Emails are off' : 'Turn these emails off?', noindex: true,
     bodyHtml: o.heart_mail_off
       ? `<p>You don’t get our evening notes now.</p>${onForm('')}<p><a href="/wall">See the wall</a></p>`
-      : `<p>You’ll stop getting our evening note about new hearts for your dogs and new dogs on the wall. Your dogs stay on the wall, and their hearts keep counting.</p><form method="post" action="${action}"><input type="hidden" name="set" value="off"><button type="submit" class="btn">Turn these emails off</button></form><p><a href="/wall">Keep them; see the wall.</a></p>` }));
+      : `<p>You’ll stop getting our evening notes about new hearts for your dogs and our Sunday look at the week’s new dogs. Your dogs stay on the wall, and their hearts keep counting.</p><form method="post" action="${action}"><input type="hidden" name="set" value="off"><button type="submit" class="btn">Turn these emails off</button></form><p><a href="/wall">Keep them; see the wall.</a></p>` }));
 }
 
 // ---------------------------------------------------------------- email invites
@@ -649,7 +723,8 @@ async function unsubscribe(env, request, hash, url) {
   hash = hash.replace(/[^a-f0-9]/g, '');
   const s = url.searchParams.get('s') || '';
   if (!hash || s !== (await unsubSig(env, hash))) return html(notFoundPage(), 404);
-  await env.DB.prepare('INSERT OR IGNORE INTO suppressed (to_hash, added_at) VALUES (?,?)').bind(hash, now()).run();
+  const r = await env.DB.prepare('INSERT OR IGNORE INTO suppressed (to_hash, added_at) VALUES (?,?)').bind(hash, now()).run();
+  if (r.meta?.changes) await stepBack(env, 'invite_off', null, null);
   return html(simplePage({ title: 'Done', bodyHtml: '<p>You won’t get another email from the Dedication Wall. We never had your address on file; now we also remember not to send.</p>', noindex: true }));
 }
 
@@ -704,6 +779,7 @@ async function remove(env, request) {
   if (e && e.status !== 'removed') {
     await env.DB.prepare('UPDATE entries SET status = \'removed\', removed_at = ? WHERE id = ?').bind(now(), id).run();
     await deletePhotos(env, e);
+    await stepBack(env, 'dog_removed', e.owner_email, e.dog_name);
   }
   return html(simplePage({ title: 'Removed', bodyHtml: '<p>The dedication is off the wall, and its photos are deleted. <a href="/">Make another any time.</a></p>', noindex: true }));
 }
@@ -954,7 +1030,8 @@ async function pushSubscribe(env, request, ctx) {
 
 async function pushUnsubscribe(env, request) {
   const b = await request.json().catch(() => ({}));
-  await env.DB.prepare('DELETE FROM push_subs WHERE endpoint = ?').bind(String(b.endpoint || '')).run();
+  const r = await env.DB.prepare('DELETE FROM push_subs WHERE endpoint = ?').bind(String(b.endpoint || '')).run();
+  if (r.meta?.changes) await stepBack(env, 'push_off', null, null);
   return json({ ok: true });
 }
 
@@ -1378,6 +1455,7 @@ async function adminPage(env, request, url) {
   const { results: offRows } = await env.DB.prepare(`SELECT o.email, o.heart_mail_off_at, (SELECT GROUP_CONCAT(dog_name, ', ') FROM entries e WHERE e.owner_email = o.email AND e.status = 'live') AS dogs
     FROM owners o WHERE o.heart_mail_off = 1 ORDER BY COALESCE(o.heart_mail_off_at, 0) DESC LIMIT 100`).all();
   const invOff = (await env.DB.prepare('SELECT COUNT(*) AS n FROM suppressed').first())?.n || 0;
+  const { results: steps } = await env.DB.prepare('SELECT at, kind, email, detail FROM stepbacks WHERE at > ? ORDER BY at DESC LIMIT 100').bind(now() - 30 * 86400).all();
   // Asked for a sign-in in the last week and never posted (11/11: a friend asked whether she “did it right”
   // and nothing showed where she stopped). Signed in = the newest link or code was used.
   const { results: stalled } = await env.DB.prepare(`SELECT o.email, o.link_sent_at, o.links_n, o.magic_token IS NULL AS signed_in FROM owners o
@@ -1401,6 +1479,8 @@ ${stalled.length ? `<ul class="small">${stalled.map((o) => `<li><a href="mailto:
 </form>
 <h2>Background requests (${reqs.length} open)</h2>
 ${reqs.length ? `<ul class="small">${reqs.map((r) => `<li>${h(centralDateTime(r.created_at))} · <em>${h(r.text)}</em>${r.email ? ` · <a href="mailto:${h(r.email)}?subject=Your%20background%20request">${h(r.email)}</a>` : ''} · <button class="btn quiet" style="padding:4px 10px;font-size:13px" onclick="closeRequest('${h(r.id)}')">Done</button></li>`).join('')}</ul>` : '<p class="small">None open.</p>'}
+<h2>Stepped back (last 30 days: ${steps.length})</h2>
+${steps.length ? `<ul class="small">${steps.map((x) => `<li>${h(stepWords(x, f))} · ${h(centralDateTime(x.at))}</li>`).join('')}</ul>` : '<p class="small">Nobody has stepped back.</p>'}
 <h2>Turned the emails off (${offRows.length})</h2>
 ${offRows.length ? `<ul class="small">${offRows.map((o) => `<li>${h(o.email)}${o.dogs ? ` · ${h(o.dogs)}` : ''} · ${o.heart_mail_off_at ? h(centralDateTime(o.heart_mail_off_at)) : 'before Nov 16'}</li>`).join('')}</ul>` : '<p class="small">Nobody has turned the wall’s emails off.</p>'}
 <p class="small">They tapped “Turn these emails off” (or their mail app’s Unsubscribe) in an evening note or the ${h(f.name)} email; their dogs stay on the wall. Invited friends who said “don’t email me again”: ${invOff} (their addresses aren’t kept, only a scrambled check).</p>
@@ -1431,22 +1511,37 @@ async function daily(env) {
     if (stale.length) await env.PHOTOS.delete(stale);
   } catch (err) { console.error('tmp sweep', err); }
   const q = async (sql, ...b) => (await env.DB.prepare(sql).bind(...b).first());
-  // What broke yesterday: one email, only when something did. Then the canary, then the sweep.
+  // Yesterday, in one 7 a.m. email, only when something happened (11/16): who stepped back, then what broke.
+  // Then the canary, then the sweep.
   try {
-    const { results: rows } = await env.DB.prepare('SELECT at, kind, detail, ua, visitor, email FROM failures WHERE at > ? AND at <= ? ORDER BY at ASC LIMIT 60').bind(t - 86400, t).all();
-    if (rows.length && env.CONTACT_EMAIL) {
-      // One item per failure, in plain words (11/16), with what to do and whether the person got through.
-      const list = await describeFailures(env, rows);
-      const one = (f) => `${centralDateTime(f.at)}: ${f.x.what}${f.n > 1 ? ` (${f.n} times)` : ''}${f.email ? ` ${f.email}` : ''}${f.afterText ? `, ${f.afterText}` : ''}.${f.x.todo ? ` What to do: ${f.x.todo}` : ''}`;
-      await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'digest', subject: `Dedication Wall: what broke yesterday (${rows.length})`,
-        text: `${list.map(one).join('\n\n')}\n\nThe details: ${site(env)}/admin`,
-        html: `<ul>${list.map((f) => `<li style="margin-bottom:10px"><strong>${h(f.x.what)}</strong>${f.n > 1 ? ` (${f.n} times)` : ''}<br><span style="color:#6f665d">${h(centralDateTime(f.at))}${f.ua ? ` · ${h(device(f.ua))}` : ''}${f.email ? ` · ${h(f.email)}` : ''}${f.afterText ? ` · ${h(f.afterText)}` : ''}</span><br>${h(f.x.saw)}${f.x.todo ? ` <em>What to do:</em> ${h(f.x.todo)}` : ''}</li>`).join('')}</ul><p><a href="${site(env)}/admin">The details on the admin page</a></p>` });
-    }
-  } catch (err) { console.error('failure digest', err); }
+    const m = await yesterdayEmail(env, t);
+    if (m && env.CONTACT_EMAIL) await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'digest', ...m });
+  } catch (err) { console.error('morning digest', err); }
   await canary(env);
   try { await env.DB.prepare('DELETE FROM failures WHERE at < ?').bind(t - 30 * 86400).run(); } catch (err) { console.error('failure sweep', err); }
   const isMonday = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', weekday: 'short' }).format(new Date()) === 'Mon';
   if (isMonday && env.CONTACT_EMAIL) await sendMail(env, { to: env.CONTACT_EMAIL, kind: 'digest', ...(await weekSummary(env, t)) });
+}
+
+// The 7 a.m. email's words (11/16): who stepped back and what broke in the 24 hours before t, or null.
+async function yesterdayEmail(env, t) {
+  const { results: rows } = await env.DB.prepare('SELECT at, kind, detail, ua, visitor, email FROM failures WHERE at > ? AND at <= ? ORDER BY at ASC LIMIT 60').bind(t - 86400, t).all();
+  const { results: steps } = await env.DB.prepare('SELECT at, kind, email, detail FROM stepbacks WHERE at > ? AND at <= ? ORDER BY at ASC LIMIT 60').bind(t - 86400, t).all();
+  if (!rows.length && !steps.length) return null;
+  const f = feature((await settings(env)).dotdCadence);
+  const list = await describeFailures(env, rows);
+  // One item per failure, in plain words (11/16), with what to do and whether the person got through.
+  const one = (x) => `${centralDateTime(x.at)}: ${x.x.what}${x.n > 1 ? ` (${x.n} times)` : ''}${x.email ? ` ${x.email}` : ''}${x.afterText ? `, ${x.afterText}` : ''}.${x.x.todo ? ` What to do: ${x.x.todo}` : ''}`;
+  const parts = [];
+  if (steps.length) parts.push(`${steps.length} stepped back`);
+  if (rows.length) parts.push(`${rows.length} ${rows.length === 1 ? 'thing' : 'things'} broke`);
+  const stepText = steps.length ? `Stepped back:\n\n${steps.map((x) => `${centralDateTime(x.at)}: ${stepWords(x, f)}`).join('\n')}\n\n` : '';
+  const failText = rows.length ? `What broke:\n\n${list.map(one).join('\n\n')}\n\n` : '';
+  const stepHtml = steps.length ? `<h3 style="margin:0 0 6px">Stepped back</h3><ul>${steps.map((x) => `<li style="margin-bottom:6px">${h(stepWords(x, f))}<br><span style="color:#6f665d">${h(centralDateTime(x.at))}</span></li>`).join('')}</ul>` : '';
+  const failHtml = rows.length ? `<h3 style="margin:14px 0 6px">What broke</h3><ul>${list.map((x) => `<li style="margin-bottom:10px"><strong>${h(x.x.what)}</strong>${x.n > 1 ? ` (${x.n} times)` : ''}<br><span style="color:#6f665d">${h(centralDateTime(x.at))}${x.ua ? ` · ${h(device(x.ua))}` : ''}${x.email ? ` · ${h(x.email)}` : ''}${x.afterText ? ` · ${h(x.afterText)}` : ''}</span><br>${h(x.x.saw)}${x.x.todo ? ` <em>What to do:</em> ${h(x.x.todo)}` : ''}</li>`).join('')}</ul>` : '';
+  return { subject: `Dedication Wall yesterday: ${parts.join(', ')}`,
+    text: `${stepText}${failText}The details: ${site(env)}/admin`,
+    html: `${stepHtml}${failHtml}<p><a href="${site(env)}/admin">The details on the admin page</a></p>` };
 }
 
 // The Monday summary (11/16, Brock: “can we make that more explicit”): each number with one line saying what
@@ -1460,7 +1555,6 @@ async function weekSummary(env, t) {
   const n = {
     newLive: (await q('SELECT COUNT(*) AS n FROM entries WHERE status = \'live\' AND is_test = 0 AND live_at > ?', since)).n,
     allLive: (await q('SELECT COUNT(*) AS n FROM entries WHERE status = \'live\' AND is_test = 0')).n,
-    offWeek: (await q('SELECT COUNT(*) AS n FROM owners WHERE heart_mail_off = 1 AND heart_mail_off_at > ?', since)).n,
     offAll: (await q('SELECT COUNT(*) AS n FROM owners WHERE heart_mail_off = 1')).n,
     pending: (await q('SELECT COUNT(*) AS n FROM entries WHERE status = \'pending\'')).n,
     heartsWeek: (await q('SELECT COUNT(*) AS n FROM hearts hh JOIN entries e ON e.id = hh.entry_id WHERE e.is_test = 0 AND hh.day >= ?', centralDay(since * 1000))).n,
@@ -1476,13 +1570,23 @@ async function weekSummary(env, t) {
   const evenings = {};
   for (const r of noteRows) { const d = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', weekday: 'short' }).format(new Date(r.sent_at * 1000)); evenings[d] = (evenings[d] || 0) + 1; }
   const byEvening = Object.entries(evenings).map(([d, k]) => `${d} ${k}`).join(' · ');
+  // Stepped back this week, by kind (11/16).
+  const { results: stepRows } = await env.DB.prepare('SELECT kind, COUNT(*) AS n FROM stepbacks WHERE at > ? GROUP BY kind').bind(since).all();
+  const STEP = {
+    mail_off: (k) => `${k} turned the emails off`, mail_on: (k) => `${k} turned them back on`,
+    spam: (k) => `${k} marked an email as spam`, bounce: (k) => `${k} ${k === 1 ? 'address' : 'addresses'} bounced for good`,
+    push_off: (k) => `${k} ${k === 1 ? 'phone' : 'phones'} turned off the notification`, dog_removed: (k) => `${k} took a dog off the wall`,
+    invite_off: (k) => `${k} invited ${k === 1 ? 'friend' : 'friends'} said “don’t email me again”`,
+  };
+  const stepped = stepRows.filter((r) => r.kind !== 'mail_on').reduce((a, r) => a + r.n, 0);
+  const stepLine = stepRows.map((r) => (STEP[r.kind] ? STEP[r.kind](r.n) : `${r.n} ${r.kind}`)).join(', ');
   const rows = [
     [`New dogs on the wall: ${n.newLive} this week, ${n.allLive} in all`, 'Dogs that went up this week, and every dog on the wall now (In Memory included).'],
     [`Waiting for your look: ${n.pending}`, 'Posts the screener held back for you to put up or turn down (the queue on the admin page).'],
     [`Hearts: ${n.heartsWeek} this week, ${n.hearts} in all`, 'Hearts visitors left on the dogs (one per person, per dog, per day).'],
     [n.notes ? `Evening emails: ${n.notes}, to ${n.notePeople} ${n.notePeople === 1 ? 'person' : 'people'} on ${Object.keys(evenings).length} ${Object.keys(evenings).length === 1 ? 'evening' : 'evenings'} (${byEvening})` : 'Evening emails: none',
-      'Each evening between 6 and 8, everyone who has posted a dog gets one short email if there’s news for them: new hearts on their dog, or new dogs from other people. No news, no email; never more than one a day.'],
-    [`Turned the emails off: ${n.offWeek} this week, ${n.offAll} in all`, 'People who have posted and tapped “Turn these emails off” (or their mail app’s Unsubscribe) in an evening note or the ' + f.name + ' email. Their dogs stay on the wall. Who and when: the admin page.'],
+      'Between 6 and 8 p.m., someone who has posted gets a short email on an evening their dog got new hearts. On Sundays it also brings the week’s new dogs, with pictures. No news, no email; never more than one a day.'],
+    [`Stepped back: ${stepped} this week`, `${stepLine ? `${stepLine}. ` : 'Nobody stepped back. '}Emails off now: ${n.offAll} ${n.offAll === 1 ? 'person' : 'people'}. Who and when: the admin page, and the 7 a.m. email the morning after.`],
     [`Phones getting the ${f.name}: ${n.phones}`, `Phones that turned on the ${f.weekly ? 'Monday-morning' : 'morning'} notification about the ${f.name}. iPhones can only do it from the wall saved to the home screen.`],
     [`Background requests waiting: ${n.requests}`, 'Backgrounds visitors asked for that you haven’t marked done.'],
     [`Failures this week: ${n.fails}`, n.fails ? 'Things that broke, each one explained on the admin page.' : 'Nothing broke.'],
