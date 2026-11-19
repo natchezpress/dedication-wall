@@ -32,7 +32,7 @@
        phone turns); it stops facing front, holds a beat, and fades into the maker. It plays on each launch
        from the home-screen icon (the manifest opens /?utm_source=homescreen…), once per browser session on
        a computer (11/13: a mouse or trackpad; phones in the browser still skip it), and on any page with
-       ?splash=1, for trying it anywhere. Esc skips it (11/19). The cream matches the manifest's background, so it follows the
+       ?splash=1, for trying it anywhere. Esc, or a tap on the medallion, skips it (11/19). The cream matches the manifest's background, so it follows the
        phone's own launch screen without a flash. -->
   <style>
     #splash { position: fixed; inset: 0; z-index: 9999; display: none; align-items: center; justify-content: center; background: #f7f1e6; pointer-events: none; }
@@ -44,6 +44,7 @@
       box-shadow: inset 0 0 0 5px #b48a3c, inset 0 0 0 9px #f6efe2, inset 0 0 0 10px rgba(180,138,60,.5), 0 14px 30px rgba(43,38,34,.18);
       transform: perspective(2000px) rotateY(0deg); backface-visibility: visible; -webkit-backface-visibility: visible; will-change: transform;
       animation: splash-coin 8s linear forwards; }
+    #splash .grow { pointer-events: auto; cursor: pointer; -webkit-tap-highlight-color: transparent; }
     #splash .coin svg { display: block; width: 72%; height: auto; margin-top: 6px; }
     #splash .coin::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,.65) 50%, transparent 65%); transform: translateX(120%); animation: splash-glint 4s linear 2 forwards; }
     html.splash-out #splash { animation: splash-fade .45s ease forwards; }
@@ -66,14 +67,20 @@
         var root = document.documentElement;
         root.classList.add('splash');
         var out = function () { root.classList.add('splash-out'); };
-        var done = function () { root.classList.remove('splash', 'splash-out'); document.removeEventListener('keydown', esc); };
-        var t1 = setTimeout(out, 8350), t2 = setTimeout(done, 8800);
-        // Esc skips it on a computer (11/19): the same short fade, straight into the maker.
-        var esc = function (e) {
-          if (e.key !== 'Escape' && e.key !== 'Esc') return;
-          clearTimeout(t1); clearTimeout(t2); out(); t2 = setTimeout(done, 450);
+        var done = function () {
+          root.classList.remove('splash', 'splash-out');
+          document.removeEventListener('keydown', esc);
+          ['click', 'pointerup', 'touchend'].forEach(function (k) { document.removeEventListener(k, tap); });
         };
+        var t1 = setTimeout(out, 8350), t2 = setTimeout(done, 8800);
+        // Esc, or a tap or click on the medallion, skips it (11/19): the same short fade, straight into the maker.
+        // Listening for the tap three ways, since phones differ in which they send; only the first counts.
+        var skipped = false;
+        var skip = function () { if (skipped) return; skipped = true; clearTimeout(t1); clearTimeout(t2); out(); t2 = setTimeout(done, 450); };
+        var esc = function (e) { if (e.key === 'Escape' || e.key === 'Esc') skip(); };
+        var tap = function (e) { if (e.target && e.target.closest && e.target.closest('#splash .grow')) { if (e.cancelable) e.preventDefault(); skip(); } };
         document.addEventListener('keydown', esc);
+        ['click', 'pointerup', 'touchend'].forEach(function (k) { document.addEventListener(k, tap, { passive: false }); });
       } catch (e) { /* no splash, no harm */ }
     })();
   </script>
