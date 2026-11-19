@@ -54,6 +54,10 @@ const PAGE = [
     what: 'A drag on the card stopped short (a touch the phone cancelled).',
     saw: 'That one touch did nothing; the next one worked.',
     todo: 'Nothing. Fixed Nov 14.' }],
+  [/Object Not Found Matching Id:\d+/i, {
+    what: 'An email scanner (Microsoft Outlook’s) opened a wall link to check it was safe. Not a person.',
+    saw: 'Nobody saw anything.',
+    todo: 'Nothing. These are ignored from Nov 19 on.' }],
   [/^unhandled: (load failed|failed to fetch|networkerror|the network connection was lost)/i, {
     what: 'Something the page asked the wall for didn’t arrive, usually a dropped connection.',
     saw: 'Probably nothing, or one step that didn’t respond.',

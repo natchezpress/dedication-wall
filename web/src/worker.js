@@ -1209,6 +1209,10 @@ async function pageError(env, request, ctx) {
   if (!detail) return bad('nothing to log');
   // Pages opened before 11/11 still send the browser's blanked “Script error. @ :0” (someone else's script).
   if (/^Script error\.?\s*@\s*:0$/i.test(detail)) return json({ ok: true, kept: false });
+  // Microsoft's email link scanner (Outlook Safe Links) opens links in emails to check them, in a
+  // headless browser that throws its own “Object Not Found Matching Id:N, MethodName:update…”. Not a
+  // person, nothing of ours (11/19: nine at 10:05 a.m. from one “Windows PC, Chrome”).
+  if (/Object Not Found Matching Id:\d+/i.test(detail)) return json({ ok: true, kept: false });
   const step = String(body.step || '').slice(0, 40);
   const vh = await visitorHash(request, secret(env));
   const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM failures WHERE kind = \'page\' AND visitor = ? AND at > ?').bind(vh, now() - 86400).first())?.n || 0;
@@ -1409,9 +1413,10 @@ async function admin(env, request, url) {
   if (p === 'stats' && request.method === 'GET') {
     const q = async (sql) => (await env.DB.prepare(sql).first());
     return json({ ok: true,
-      entries: await q('SELECT status, COUNT(*) AS n FROM entries GROUP BY status'),
+      entries: (await env.DB.prepare('SELECT status, COUNT(*) AS n FROM entries WHERE is_test = 0 GROUP BY status').all()).results,
+      tests: (await q('SELECT COUNT(*) AS n FROM entries WHERE is_test = 1')).n,
       live: (await q('SELECT COUNT(*) AS n FROM entries WHERE status = \'live\' AND is_test = 0')).n,
-      hearts: (await q('SELECT COALESCE(SUM(hearts),0) AS n FROM entries')).n,
+      hearts: (await q('SELECT COALESCE(SUM(hearts),0) AS n FROM entries WHERE is_test = 0')).n,
       owners: (await q('SELECT COUNT(*) AS n FROM owners')).n,
       invites: (await q('SELECT COALESCE(SUM(visits),0) AS n FROM invites')).n,
       requests: (await q('SELECT COUNT(*) AS n FROM requests WHERE status = \'new\'')).n,
@@ -1448,7 +1453,12 @@ async function adminPage(env, request, url) {
   const { results: queue } = await env.DB.prepare('SELECT id, dog_name, line, mode, owner_email, screen_result, created_at, is_test, card_key, story_key FROM entries WHERE status = \'pending\' ORDER BY created_at ASC LIMIT 50').all();
   const { results: reqs } = await env.DB.prepare('SELECT id, text, email, created_at FROM requests WHERE status = \'new\' ORDER BY created_at DESC LIMIT 50').all();
   const { results: liveRows } = await env.DB.prepare('SELECT id, dog_name, line, owner_email, hearts, live_at, is_test FROM entries WHERE status = \'live\' ORDER BY live_at DESC LIMIT 50').all();
-  const { results: counts } = await env.DB.prepare('SELECT status, COUNT(*) AS n FROM entries GROUP BY status').all();
+  // Real posts only (11/19): Brock's own tests are flagged is_test and counted apart.
+  const { results: counts } = await env.DB.prepare('SELECT status, COUNT(*) AS n FROM entries WHERE is_test = 0 GROUP BY status').all();
+  const tests = (await env.DB.prepare('SELECT COUNT(*) AS n FROM entries WHERE is_test = 1').first())?.n || 0;
+  const countOf = (st) => counts.find((c) => c.status === st)?.n || 0;
+  const countLine = [...['live', 'pending', 'rejected', 'removed'].map((st) => `${st} ${countOf(st)}`),
+    ...counts.filter((c) => !['live', 'pending', 'rejected', 'removed'].includes(c.status)).map((c) => `${h(c.status)} ${c.n}`)].join(' · ');
   const { results: failRows } = await env.DB.prepare('SELECT at, kind, detail, ua, visitor, email FROM failures WHERE at > ? ORDER BY at DESC LIMIT 40').bind(now() - 86400).all();
   const fails = await describeFailures(env, failRows);
   // Who turned the wall's emails off, newest first (11/16).
@@ -1490,7 +1500,7 @@ ${fails.length ? `<ul>${fails.map((f) => `<li style="margin-bottom:12px"><strong
 <div class="small">${h(f.x.saw)}${f.x.todo ? ` <em>What to do:</em> ${h(f.x.todo)}` : ''}</div>
 <div class="small" style="color:#8a8178">${h(FAILURE_LABEL[f.kind] || f.kind)}: ${h(f.detail || '')}</div></li>`).join('')}</ul>` : '<p class="small">Nothing failed.</p>'}
 <p class="small">An email comes when one kind fails three times in an hour (posting: once), then rests six hours. <button class="btn quiet" style="padding:4px 10px;font-size:13px" onclick="testAlert()">Send a test alert</button> <span class="small" id="tested"></span></p>
-<p class="small">Entries: ${counts.map((c) => `${h(c.status)} ${c.n}`).join(' · ') || 'none'}. Posting on the live site: <strong>${postingOn(env) ? 'ON' : 'OFF'}</strong> (a deploy variable, not a switch here).</p>
+<p class="small">Entries: ${countLine}${tests ? ` (not counting ${tests} test post${tests === 1 ? '' : 's'})` : ''}. Posting on the live site: <strong>${postingOn(env) ? 'ON' : 'OFF'}</strong> (a deploy variable, not a switch here).</p>
 <script>
 async function takeDown(id, name){ if(!window.confirm('Take ' + name + ' off the wall and delete the photos? This cannot be undone.')) return; await decide(id, 'removed'); }
 async function testAlert(){ const r = await fetch('/api/admin/failures/test',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:'server'})}); const j = await r.json(); document.getElementById('tested').textContent = j.sent ? 'Sent; check your inbox.' : 'Recorded, but no email went out.'; }
