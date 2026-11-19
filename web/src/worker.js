@@ -1209,6 +1209,10 @@ async function pageError(env, request, ctx) {
   if (!detail) return bad('nothing to log');
   // Pages opened before 11/11 still send the browser's blanked “Script error. @ :0” (someone else's script).
   if (/^Script error\.?\s*@\s*:0$/i.test(detail)) return json({ ok: true, kept: false });
+  // Microsoft's email link scanner (Outlook Safe Links) opens links in emails to check them, in a
+  // headless browser that throws its own “Object Not Found Matching Id:N, MethodName:update…”. Not a
+  // person, nothing of ours (11/19: nine at 10:05 a.m. from one “Windows PC, Chrome”).
+  if (/Object Not Found Matching Id:\d+/i.test(detail)) return json({ ok: true, kept: false });
   const step = String(body.step || '').slice(0, 40);
   const vh = await visitorHash(request, secret(env));
   const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM failures WHERE kind = \'page\' AND visitor = ? AND at > ?').bind(vh, now() - 86400).first())?.n || 0;
