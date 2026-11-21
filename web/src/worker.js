@@ -78,7 +78,7 @@ export default {
 
   // Hourly. The 13:00 UTC tick runs the daily jobs (7 a.m. Central in winter, 8 in summer), as the old
   // once-a-day trigger did. Every tick also checks the morning job (9 and 10 a.m.: the Dog of the Week's
-  // email and notifications on Mondays, or every day when the admin switch says daily) and the evening notes (6, 7 and 8 p.m.); each only acts in its own hours.
+  // email and notifications on Mondays, or every day when the admin switch says daily) and the Sunday note (6, 7 and 8 p.m.); each only acts in its own hours.
   async scheduled(event, env, ctx) {
     const at = event.scheduledTime || Date.now();
     if (new Date(at).getUTCHours() === 13) ctx.waitUntil(daily(env));
@@ -395,17 +395,17 @@ async function notifyLive(env, e) {
     html: branded(env, `<p><strong>${h(e.dog_name)}</strong>’s dedication is live: <a href="${page}">${page}</a></p><p>Share this link so friends can see it and leave a heart:<br><a href="${inviteUrl}">${inviteUrl}</a></p><p>Invite up to five friends by email (we send one short note and keep no addresses):<br><a href="${inviteForm}">${inviteForm}</a></p><p><strong>Keep the wall on your phone</strong>, so you can easily come back, see who’s new, and ${f.meet}.</p>${homeStepsHtml(env, 'live-email', f)}<p style="color:#6f665d;font-size:13px">To take it down at any time: <a href="${removeUrl}">remove this dedication</a>.</p>`) });
 }
 
-// ---------------------------------------------------------------- evening notes (hearts nightly, new dogs on Sundays)
-// 11/16 (Brock): an evening note goes only on an evening someone's own dog got new hearts; other people's new
-// dogs wait for one Sunday-evening roundup of the week, with pictures (sent only in weeks with new dogs). Still
-// never more than one wall email a day: on a Sunday with hearts too, it's all one email.
+// ---------------------------------------------------------------- the Sunday note (once a week)
+// 11/21 (Brock, after an owner turned the emails off following seven in four days): “maybe we make less
+// frequent” → “go.” One note a week at most, Sunday evening: the week's new hearts on your own dogs and the
+// week's new dogs, with pictures. Weekdays send nothing; hearts wait for Sunday. No news, no note.
+// (11/16 had been: hearts on any evening, new dogs on Sundays.)
 // Everyone with a dog on the wall hears what happened since their last note: new hearts on their own dogs,
 // and dogs other people put up. Once, on the first hourly tick after heart emails shipped (7 a.m. to 9 p.m.
 // Central), everyone whose dogs already had hearts got a catch-up note about hearts alone. From then on:
-// one short note on an evening there is something to tell (the 6, 7 and 8 p.m. Central ticks), all of a
-// person's news in one note, never more than one a day. Anything that lands after the evening's note waits
-// for the next evening. The day is marked even when a send fails (one try a day); the counters only move
-// on success, so a failed note's news rolls into the next one. Test entries and taken-down dogs never
+// one short note on a Sunday there is something to tell (the 6, 7 and 8 p.m. Central ticks), all of a
+// person's news in one note. Anything that lands after Sunday's note waits for the next Sunday. The day
+// is marked even when a send fails (one try a day); the counters only move on success, so a failed note's news rolls into the next one. Test entries and taken-down dogs never
 // appear, and nobody is told about their own dog. Off with one tap.
 const NOTE_EVENING = [18, 21];   // Central hours: from, up to (not including)
 const NOTE_CATCHUP = [7, 21];
@@ -420,6 +420,7 @@ async function eveningNotes(env, ts = Date.now()) {
   else if (hour >= NOTE_EVENING[0] && hour < NOTE_EVENING[1]) kind = 'daily';
   if (!kind) return [];
   const roundup = weekday(day) === 0; // Sunday: the week's new dogs come along
+  if (kind === 'daily' && !roundup) return []; // 11/21: once a week; weekday hearts wait for Sunday
   const { results: owners } = await env.DB.prepare(`SELECT email, mail_key, news_at, told_morning FROM owners
     WHERE heart_mail_off = 0 AND (heart_mail_day IS NULL OR heart_mail_day != ?)
       AND EXISTS (SELECT 1 FROM entries WHERE owner_email = owners.email AND status = 'live' AND is_test = 0)
@@ -501,7 +502,7 @@ function noteBody(env, { kind, dogs, news, key, mine = dogs, tell = false, f = f
   if (kind === 'catchup') {
     const names = and(dogs.map((d) => d.dog_name));
     const share = `${site(env)}/i/${d0.invite_code}?utm_source=share&utm_medium=referral&utm_campaign=ops-57`;
-    const later = `From here on, we’ll send a short note on any evening ${one ? d0.dog_name : 'your dogs'} get${one ? 's' : ''} new hearts, and on Sundays a look at the week’s new dogs. Never more than one a day.`;
+    const later = `From here on, we’ll send one short note on Sunday evenings, in weeks when ${one ? d0.dog_name : 'your dogs'} get${one ? 's' : ''} new hearts or new dogs join the wall. At most once a week.`;
     subject = `People are leaving hearts for ${names}`;
     if (one) {
       text = `Since ${d0.dog_name} went up on the Dedication Wall, people have been stopping by and leaving hearts: ${rows[0].count}.\n\nSee ${d0.dog_name}’s page:\n${rows[0].page}\n\nShare ${d0.dog_name}’s link and more friends can leave one:\n${share}\n\n${later}`;
@@ -519,13 +520,14 @@ function noteBody(env, { kind, dogs, news, key, mine = dogs, tell = false, f = f
       const r = rows[0];
       const got = r.fresh === 1 ? 'a new heart' : `${r.fresh} new hearts`;
       const total = r.fresh === d0.hearts ? '' : ` That’s ${hearts(d0.hearts)} in all.`;
-      subject = `${d0.dog_name} got ${got}`;
-      text = `${d0.dog_name} got ${got} on the Dedication Wall.${total}\n\nSee ${d0.dog_name}’s page:\n${r.page}`;
-      inner = `<p><strong>${h(d0.dog_name)}</strong> got ${got} on the Dedication Wall.${h(total)}</p>${pic(d0, r.page, news.length ? 120 : 180)}<p>${news.length ? `<a href="${r.page}">See ${h(d0.dog_name)}’s page</a>` : btn(r.page, `See ${h(d0.dog_name)}’s page`)}</p>`;
+      const wk = week ? ' this week' : '';
+      subject = `${d0.dog_name} got ${got}${wk}`;
+      text = `${d0.dog_name} got ${got} on the Dedication Wall${wk}.${total}\n\nSee ${d0.dog_name}’s page:\n${r.page}`;
+      inner = `<p><strong>${h(d0.dog_name)}</strong> got ${got} on the Dedication Wall${wk}.${h(total)}</p>${pic(d0, r.page, news.length ? 120 : 180)}<p>${news.length ? `<a href="${r.page}">See ${h(d0.dog_name)}’s page</a>` : btn(r.page, `See ${h(d0.dog_name)}’s page`)}</p>`;
     } else {
-      subject = `New hearts for ${and(dogs.map((d) => d.dog_name))}`;
-      text = `New hearts on the Dedication Wall:\n\n${rows.map((r) => `${r.d.dog_name}: ${r.count}\n${r.page}`).join('\n\n')}`;
-      inner = `<p>New hearts on the Dedication Wall:</p>${grid(rows.map((r) => ({ e: r.d, href: r.page, label: r.d.dog_name, note: `♥ ${r.count}` })))}`;
+      subject = `New hearts${week ? ' this week' : ''} for ${and(dogs.map((d) => d.dog_name))}`;
+      text = `New hearts on the Dedication Wall${week ? ' this week' : ''}:\n\n${rows.map((r) => `${r.d.dog_name}: ${r.count}\n${r.page}`).join('\n\n')}`;
+      inner = `<p>New hearts on the Dedication Wall${week ? ' this week' : ''}:</p>${grid(rows.map((r) => ({ e: r.d, href: r.page, label: r.d.dog_name, note: `♥ ${r.count}` })))}`;
     }
   }
 
@@ -570,8 +572,8 @@ function stepWords(x, f = feature()) {
   const invite = /^invite/.test(x.detail || '');
   const subj = x.detail && !invite ? ` (“${x.detail}”)` : '';
   switch (x.kind) {
-    case 'mail_off': return `${who} turned the evening emails off${x.detail ? ` (${x.detail})` : ''}.`;
-    case 'mail_on': return `${who} turned the evening emails back on${x.detail ? ` (${x.detail})` : ''}.`;
+    case 'mail_off': return `${who} turned the wall’s emails off${x.detail ? ` (${x.detail})` : ''}.`;
+    case 'mail_on': return `${who} turned the wall’s emails back on${x.detail ? ` (${x.detail})` : ''}.`;
     case 'spam': return invite ? 'An invited friend marked their invitation as spam. They won’t be invited again.' : `${who} marked a wall email as spam${subj}. The wall has stopped emailing them.`;
     case 'bounce': return invite ? 'An invitation bounced: the address doesn’t work.' : `An email to ${who} bounced${subj}: the address doesn’t work, so the wall stopped emailing it.`;
     case 'push_off': return `A phone turned off the ${f.name} notification.`;
@@ -583,7 +585,7 @@ function stepWords(x, f = feature()) {
 
 // POST /api/resend: Resend tells the wall when someone marks a wall email as spam or an email bounces for good
 // (a webhook, signed with RESEND_WEBHOOK_SECRET, which Brock pasted into Cloudflare). The wall then stops
-// emailing that address: an owner's evening notes go off; an invited friend is never invited again. A spam
+// emailing that address: an owner's wall emails go off; an invited friend is never invited again. A spam
 // report matters most: too many and Gmail starts filtering the sign-in codes too.
 async function resendHook(env, request) {
   const sec = env.RESEND_WEBHOOK_SECRET;
@@ -618,7 +620,7 @@ async function resendHook(env, request) {
   return json({ ok: true, kind });
 }
 
-// The off switch in every evening note. The GET only shows a page with one button, because mail scanners
+// The off switch in every Sunday note. The GET only shows a page with one button, because mail scanners
 // follow links; the button posts. Mail apps' own one-tap unsubscribe (List-Unsubscribe-Post) posts here too.
 async function heartSwitch(env, request) {
   const url = new URL(request.url);
@@ -637,13 +639,13 @@ async function heartSwitch(env, request) {
     if ((want === 'off') !== !!o.heart_mail_off) await stepBack(env, want === 'off' ? 'mail_off' : 'mail_on', o.email, await dogsOf(env, o.email));
     return html(simplePage({ title: want === 'off' ? 'Emails are off' : 'Emails are on', noindex: true,
       bodyHtml: want === 'off'
-        ? `<p>You won’t get our evening notes anymore. Your dogs stay on the wall, and their hearts keep counting.</p>${onForm(' quiet')}<p><a href="/wall">See the wall</a></p>`
-        : '<p>You’ll get a short note on any evening your dogs get new hearts, and on Sundays a look at the week’s new dogs. Never more than one a day.</p><p><a href="/wall">See the wall</a></p>' }));
+        ? `<p>You won’t get our Sunday notes anymore. Your dogs stay on the wall, and their hearts keep counting.</p>${onForm(' quiet')}<p><a href="/wall">See the wall</a></p>`
+        : '<p>You’ll get one short note on Sunday evenings, in weeks when your dogs get new hearts or new dogs join the wall. At most once a week.</p><p><a href="/wall">See the wall</a></p>' }));
   }
   return html(simplePage({ title: o.heart_mail_off ? 'Emails are off' : 'Turn these emails off?', noindex: true,
     bodyHtml: o.heart_mail_off
-      ? `<p>You don’t get our evening notes now.</p>${onForm('')}<p><a href="/wall">See the wall</a></p>`
-      : `<p>You’ll stop getting our evening notes about new hearts for your dogs and our Sunday look at the week’s new dogs. Your dogs stay on the wall, and their hearts keep counting.</p><form method="post" action="${action}"><input type="hidden" name="set" value="off"><button type="submit" class="btn">Turn these emails off</button></form><p><a href="/wall">Keep them; see the wall.</a></p>` }));
+      ? `<p>You don’t get our Sunday notes now.</p>${onForm('')}<p><a href="/wall">See the wall</a></p>`
+      : `<p>You’ll stop getting our Sunday notes about new hearts for your dogs and the week’s new dogs. Your dogs stay on the wall, and their hearts keep counting.</p><form method="post" action="${action}"><input type="hidden" name="set" value="off"><button type="submit" class="btn">Turn these emails off</button></form><p><a href="/wall">Keep them; see the wall.</a></p>` }));
 }
 
 // ---------------------------------------------------------------- email invites
@@ -887,7 +889,7 @@ async function dotdOwnerMail(env, e, day, f = feature()) {
   const m = await dotdMailBody(env, e, key, f);
   const r = await sendMail(env, { to: o.email, kind: 'dotd', entry_id: e.id, subject: m.subject, text: m.text, html: m.html,
     headers: { 'List-Unsubscribe': `<${m.off}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } });
-  // It is this person's one email for the day; their evening note's news waits for tomorrow evening.
+  // It is this person's one email for the day; their hearts wait for Sunday's note.
   if (r.status !== 'failed') await env.DB.prepare('UPDATE owners SET heart_mail_day = ? WHERE email = ?').bind(day, o.email).run();
   return devMode(env) ? { status: r.status, to: o.email, subject: m.subject, text: m.text, html: m.html } : r.status;
 }
@@ -1493,7 +1495,7 @@ ${reqs.length ? `<ul class="small">${reqs.map((r) => `<li>${h(centralDateTime(r.
 ${steps.length ? `<ul class="small">${steps.map((x) => `<li>${h(stepWords(x, f))} · ${h(centralDateTime(x.at))}</li>`).join('')}</ul>` : '<p class="small">Nobody has stepped back.</p>'}
 <h2>Turned the emails off (${offRows.length})</h2>
 ${offRows.length ? `<ul class="small">${offRows.map((o) => `<li>${h(o.email)}${o.dogs ? ` · ${h(o.dogs)}` : ''} · ${o.heart_mail_off_at ? h(centralDateTime(o.heart_mail_off_at)) : 'before Nov 16'}</li>`).join('')}</ul>` : '<p class="small">Nobody has turned the wall’s emails off.</p>'}
-<p class="small">They tapped “Turn these emails off” (or their mail app’s Unsubscribe) in an evening note or the ${h(f.name)} email; their dogs stay on the wall. Invited friends who said “don’t email me again”: ${invOff} (their addresses aren’t kept, only a scrambled check).</p>
+<p class="small">They tapped “Turn these emails off” (or their mail app’s Unsubscribe) in a Sunday note or the ${h(f.name)} email; their dogs stay on the wall. Invited friends who said “don’t email me again”: ${invOff} (their addresses aren’t kept, only a scrambled check).</p>
 <h2>Last 24 hours (${failRows.length} failure${failRows.length === 1 ? '' : 's'})</h2>
 ${fails.length ? `<ul>${fails.map((f) => `<li style="margin-bottom:12px"><strong>${h(f.x.what)}</strong>${f.n > 1 ? ` (${f.n} times)` : ''}
 <div class="small">${h(centralDateTime(f.at))}${f.ua ? ` · ${h(device(f.ua))}` : ''}${f.email ? ` · ${h(f.email)}` : ''}${f.after ? ` · <strong>${f.after}</strong>` : ''}</div>
@@ -1595,7 +1597,7 @@ async function weekSummary(env, t) {
     [`Waiting for your look: ${n.pending}`, 'Posts the screener held back for you to put up or turn down (the queue on the admin page).'],
     [`Hearts: ${n.heartsWeek} this week, ${n.hearts} in all`, 'Hearts visitors left on the dogs (one per person, per dog, per day).'],
     [n.notes ? `Evening emails: ${n.notes}, to ${n.notePeople} ${n.notePeople === 1 ? 'person' : 'people'} on ${Object.keys(evenings).length} ${Object.keys(evenings).length === 1 ? 'evening' : 'evenings'} (${byEvening})` : 'Evening emails: none',
-      'Between 6 and 8 p.m., someone who has posted gets a short email on an evening their dog got new hearts. On Sundays it also brings the week’s new dogs, with pictures. No news, no email; never more than one a day.'],
+      'On Sunday between 6 and 8 p.m., someone who has posted gets one email: the week’s new hearts on their dogs and the week’s new dogs, with pictures. No news, no email; at most once a week (since Nov 21; before that, hearts went out any evening).'],
     [`Stepped back: ${stepped} this week`, `${stepLine ? `${stepLine}. ` : 'Nobody stepped back. '}Emails off now: ${n.offAll} ${n.offAll === 1 ? 'person' : 'people'}. Who and when: the admin page, and the 7 a.m. email the morning after.`],
     [`Phones getting the ${f.name}: ${n.phones}`, `Phones that turned on the ${f.weekly ? 'Monday-morning' : 'morning'} notification about the ${f.name}. iPhones can only do it from the wall saved to the home screen.`],
     [`Background requests waiting: ${n.requests}`, 'Backgrounds visitors asked for that you haven’t marked done.'],

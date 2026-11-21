@@ -18,7 +18,7 @@ const MAIL_KIND = {
   live: ['an “on the wall” email', 'Their dog is up; they just weren’t told.'],
   rejected: ['a “couldn’t go up” email', 'They weren’t told their post didn’t go up.'],
   invite: ['an invitation to a friend', 'The friend never got the invitation.'],
-  hearts: ['an evening note', 'One owner missed one evening note.'],
+  hearts: ['a Sunday note', 'One owner missed this week’s Sunday note.'],
   dotd: ['the Dog of the Week email', 'That dog’s person missed the email.'],
   alert: ['an alert to you', 'You missed one alert email.'],
   digest: ['a summary to you', 'You missed one summary email.'],
